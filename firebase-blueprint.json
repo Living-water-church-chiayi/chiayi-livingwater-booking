@@ -1,0 +1,28 @@
+{
+  "entities": {
+    "Booking": {
+      "title": "Booking",
+      "description": "A venue reservation record",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "venue": { "type": "string" },
+        "date": { "type": "string" },
+        "startTime": { "type": "string" },
+        "endTime": { "type": "string" },
+        "borrower": { "type": "string" },
+        "purpose": { "type": "string" },
+        "uid": { "type": "string" },
+        "authorName": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["venue", "date", "startTime", "endTime", "borrower", "purpose", "uid"]
+    }
+  },
+  "firestore": {
+    "/bookings/{bookingId}": {
+      "schema": "Booking",
+      "description": "Collection of all venue bookings"
+    }
+  }
+}

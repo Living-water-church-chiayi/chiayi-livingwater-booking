@@ -1,0 +1,5 @@
+{
+  "name": "嘉義活水貴格會場地借用系統",
+  "description": "一個專為教會設計的場地預約管理系統，支援重複預約與月曆視圖。",
+  "requestFramePermissions": []
+}

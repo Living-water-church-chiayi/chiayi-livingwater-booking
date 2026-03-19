@@ -1,0 +1,90 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: bookings
+    // Document ID: auto-generated
+    // Fields:
+    //   - id: string (required) - auto-generated ID
+    //   - venue: string (required) - venue name
+    //   - date: string (required) - YYYY-MM-DD
+    //   - startTime: string (required) - HH:mm
+    //   - endTime: string (required) - HH:mm
+    //   - borrower: string (required) - borrower name
+    //   - purpose: string (required) - purpose of booking
+    //   - uid: string (required) - creator's UID
+    //   - authorName: string (optional) - creator's display name
+    //   - createdAt: timestamp (optional) - creation time
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isDocOwner() {
+      return isAuthenticated() && request.auth.uid == resource.data.uid;
+    }
+
+    function hasRequiredFields(fields) {
+      return request.resource.data.keys().hasAll(fields);
+    }
+
+    function hasOnlyAllowedFields(fields) {
+      return request.resource.data.keys().hasOnly(fields);
+    }
+
+    function isValidBookingAnonymous(data) {
+      return hasRequiredFields(['venue', 'date', 'startTime', 'endTime', 'borrower', 'purpose', 'uid']) &&
+             data.venue is string && data.venue.size() > 0 && data.venue.size() < 100 &&
+             data.date is string && data.date.matches("^\\d{4}-\\d{2}-\\d{2}$") &&
+             data.startTime is string && data.startTime.matches("^\\d{2}:\\d{2}$") &&
+             data.endTime is string && data.endTime.matches("^\\d{2}:\\d{2}$") &&
+             data.borrower is string && data.borrower.size() > 0 && data.borrower.size() < 100 &&
+             data.purpose is string && data.purpose.size() > 0 && data.purpose.size() < 500 &&
+             data.uid is string;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() &&
+        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
+          (request.auth.token.email == "2273877@gmail.com" && request.auth.token.email_verified == true));
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    match /bookings/{bookingId} {
+      // Anyone can read bookings
+      allow read: if true;
+      
+      // Anyone can create a booking (anonymous or logged in)
+      allow create: if isValidBookingAnonymous(request.resource.data);
+      
+      // Only admin can update/delete (to prevent unauthorized changes)
+      allow update, delete: if isAdmin();
+    }
+
+    match /users/{userId} {
+      allow read: if isAuthenticated() && (isOwner(userId) || isAdmin());
+      allow write: if isAdmin();
+    }
+    
+    match /test/connection {
+      allow read: if true;
+    }
+  }
+}
