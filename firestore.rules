@@ -75,8 +75,9 @@ service cloud.firestore {
       // Anyone can create a booking (anonymous or logged in)
       allow create: if isValidBookingAnonymous(request.resource.data);
       
-      // Only admin can update/delete
-      allow update, delete: if isAdmin();
+      // Anyone can update/delete
+      allow update: if isValidBookingAnonymous(request.resource.data);
+      allow delete: if true;
     }
 
     match /users/{userId} {

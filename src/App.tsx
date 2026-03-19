@@ -181,27 +181,13 @@ export default function App() {
 function AppContent() {
   const [activeTab, setActiveTab] = useState<'dashboard' | 'calendar'>('dashboard');
   const [bookings, setBookings] = useState<Booking[]>([]);
-  const [user, setUser] = useState<User | null>(null);
-  const [isAuthReady, setIsAuthReady] = useState(false);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [currentDate, setCurrentDate] = useState(new Date());
   const [editingId, setEditingId] = useState<string | null>(null);
   const [selectedDateStr, setSelectedDateStr] = useState(getTodayStr());
 
-  // --- Firebase Auth ---
-  useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (u) => {
-      setUser(u);
-      setIsAuthReady(true);
-    });
-    return () => unsubscribe();
-  }, []);
-
   // --- Firebase Firestore Real-time Sync ---
   useEffect(() => {
-    // Anyone can read, but we wait for the first auth check to know if we have a user
-    if (!isAuthReady) return;
-
     const q = query(collection(db, 'bookings'), orderBy('date', 'asc'), orderBy('startTime', 'asc'));
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const bks: Booking[] = [];
@@ -214,7 +200,7 @@ function AppContent() {
     });
 
     return () => unsubscribe();
-  }, [isAuthReady]);
+  }, []);
   
   // --- 提示訊息 Toast ---
   const [toast, setToast] = useState<{ show: boolean; message: string; type: 'success' | 'error' }>({ show: false, message: '', type: 'success' });
@@ -248,22 +234,54 @@ function AppContent() {
 
   const handlePaste = async (dateStr: string) => {
     if (!clipboardBooking) return;
+    
+    // 檢查是否為過去的時間
+    const todayStr = getTodayStr();
+    if (dateStr < todayStr) {
+      showToast('無法預約過去的日期！', 'error');
+      return;
+    }
+    if (dateStr === todayStr) {
+      const now = new Date();
+      const currentTime = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
+      if (clipboardBooking.startTime < currentTime) {
+        showToast('無法預約過去的時間！', 'error');
+        return;
+      }
+    }
+
     try {
       const { id, ...data } = clipboardBooking;
       await addDoc(collection(db, 'bookings'), {
         ...data,
         date: dateStr,
-        uid: user?.uid || 'anonymous',
-        authorName: user?.displayName || '訪客',
+        uid: 'anonymous',
+        authorName: '訪客',
         createdAt: serverTimestamp()
       });
       showToast(`成功貼上至 ${dateStr}`, 'success');
     } catch (error) {
-      handleFirestoreError(error, OperationType.CREATE, 'bookings');
+      showToast('貼上失敗，請稍後再試！', 'error');
+      try {
+        handleFirestoreError(error, OperationType.CREATE, 'bookings');
+      } catch (e) {
+        // ignore
+      }
     }
   };
 
   // --- 狀態與月曆邏輯 ---
+  const getNextValidTime = (dateStr: string) => {
+    const todayStr = getTodayStr();
+    if (dateStr === todayStr) {
+      const now = new Date();
+      let nextHour = now.getHours() + 1;
+      if (nextHour >= 24) return '23:00';
+      return `${nextHour.toString().padStart(2, '0')}:00`;
+    }
+    return '10:00';
+  };
+
   const [formData, setFormData] = useState({
     venue: VENUES[0],
     date: getTodayStr(),
@@ -284,6 +302,22 @@ function AppContent() {
     setFormData(prev => ({ ...prev, purpose: preset }));
   };
 
+  useEffect(() => {
+    if (editingId) return; // Do not auto-adjust time when editing an existing booking
+    const todayStr = getTodayStr();
+    if (formData.date === todayStr) {
+      const now = new Date();
+      const currentTime = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
+      if (formData.startTime < currentTime) {
+        const nextStart = getNextValidTime(todayStr);
+        let endHour = parseInt(nextStart.split(':')[0]) + 2;
+        if (endHour >= 24) endHour = 23;
+        const nextEnd = `${endHour.toString().padStart(2, '0')}:00`;
+        setFormData(prev => ({ ...prev, startTime: nextStart, endTime: nextEnd }));
+      }
+    }
+  }, [formData.date, editingId]);
+
   const openBookingModal = (venueOrBooking: string | Booking = VENUES[0], isEditing = false, specificDate: string | null = null) => {
     if (specificDate) setSelectedDateStr(specificDate);
     
@@ -296,11 +330,16 @@ function AppContent() {
       setEditingId(venueOrBooking.id);
     } else {
       const defaultDate = specificDate || getTodayStr();
+      const defaultStart = getNextValidTime(defaultDate);
+      let endHour = parseInt(defaultStart.split(':')[0]) + 2;
+      if (endHour >= 24) endHour = 23;
+      const defaultEnd = `${endHour.toString().padStart(2, '0')}:00`;
+
       setFormData({
         venue: typeof venueOrBooking === 'string' ? venueOrBooking : VENUES[0],
         date: defaultDate,
-        startTime: '10:00',
-        endTime: '12:00',
+        startTime: defaultStart,
+        endTime: defaultEnd,
         borrower: '',
         purpose: '',
         repeat: 'none',
@@ -315,14 +354,39 @@ function AppContent() {
     e.preventDefault();
     if (!formData.borrower || !formData.purpose) return;
     
+    const originalBooking = editingId ? bookings.find(b => b.id === editingId) : null;
+    const isTimeChanged = !originalBooking || originalBooking.date !== formData.date || originalBooking.startTime !== formData.startTime;
+
+    // 時間驗證 (僅在新增或修改時間時檢查)
+    if (isTimeChanged) {
+      const todayStr = getTodayStr();
+      if (formData.date < todayStr) {
+        showToast('無法預約過去的日期！', 'error');
+        return;
+      }
+      if (formData.date === todayStr) {
+        const now = new Date();
+        const currentTime = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
+        if (formData.startTime < currentTime) {
+          showToast('無法預約過去的時間！', 'error');
+          return;
+        }
+      }
+    }
+
+    if (formData.startTime >= formData.endTime) {
+      showToast('結束時間必須晚於開始時間！', 'error');
+      return;
+    }
+    
     try {
       if (editingId) {
-        // 編輯單筆 (僅限管理員，規則會檢查)
+        // 編輯單筆
         const bookingRef = doc(db, 'bookings', editingId);
         await updateDoc(bookingRef, {
           ...formData,
-          uid: user?.uid || 'anonymous',
-          authorName: user?.displayName || '訪客'
+          uid: 'anonymous',
+          authorName: '訪客'
         });
         showToast('更新預約成功！', 'success');
       } else {
@@ -337,8 +401,8 @@ function AppContent() {
             newBookingsData.push({ 
               ...formData, 
               date: currDateStr,
-              uid: user?.uid || 'anonymous',
-              authorName: user?.displayName || '訪客',
+              uid: 'anonymous',
+              authorName: '訪客',
               createdAt: serverTimestamp()
             });
 
@@ -356,8 +420,8 @@ function AppContent() {
         } else {
           await addDoc(collection(db, 'bookings'), {
             ...formData,
-            uid: user?.uid || 'anonymous',
-            authorName: user?.displayName || '訪客',
+            uid: 'anonymous',
+            authorName: '訪客',
             createdAt: serverTimestamp()
           });
           showToast('新增預約成功！', 'success');
@@ -365,7 +429,12 @@ function AppContent() {
       }
       setIsModalOpen(false);
     } catch (error) {
-      handleFirestoreError(error, editingId ? OperationType.UPDATE : OperationType.CREATE, 'bookings');
+      showToast('儲存失敗，請稍後再試！', 'error');
+      try {
+        handleFirestoreError(error, editingId ? OperationType.UPDATE : OperationType.CREATE, 'bookings');
+      } catch (e) {
+        // ignore
+      }
     }
   };
 
@@ -376,7 +445,12 @@ function AppContent() {
       setIsModalOpen(false);
       showToast('刪除預約成功！', 'success');
     } catch (error) {
-      handleFirestoreError(error, OperationType.DELETE, `bookings/${editingId}`);
+      showToast('刪除失敗，請稍後再試！', 'error');
+      try {
+        handleFirestoreError(error, OperationType.DELETE, `bookings/${editingId}`);
+      } catch (e) {
+        // ignore
+      }
     }
   };
 
@@ -518,34 +592,6 @@ function AppContent() {
                 <span className="hidden xs:inline">月曆</span>
               </button>
             </div>
-
-            {isAuthReady && (
-              <div className="flex items-center">
-                {user ? (
-                  <div className="flex items-center gap-2">
-                    <div className="hidden sm:flex flex-col items-end mr-1">
-                      <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">已登入</span>
-                      <span className="text-xs font-bold text-slate-700">{user.displayName}</span>
-                    </div>
-                    <button 
-                      onClick={logout}
-                      className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-xl transition-all"
-                      title="登出"
-                    >
-                      <LogOut size={18} />
-                    </button>
-                  </div>
-                ) : (
-                  <button 
-                    onClick={loginWithGoogle}
-                    className="flex items-center gap-2 px-3 py-2 bg-blue-600 text-white rounded-xl text-xs sm:text-sm font-bold hover:bg-blue-700 shadow-sm shadow-blue-600/20 active:scale-95 transition-all"
-                  >
-                    <LogIn size={16} />
-                    <span>登入</span>
-                  </button>
-                )}
-              </div>
-            )}
 
             {/* Logo 移至右上角 */}
             <div className="w-8 h-8 sm:w-10 sm:h-10 shrink-0 bg-white rounded-lg overflow-hidden flex items-center justify-center ml-1 sm:ml-2">
@@ -943,16 +989,6 @@ function AppContent() {
                 
                 <form id="booking-form" onSubmit={handleSubmit} className="space-y-5 sm:space-y-6 relative z-10">
                   
-                  {!user && editingId && (
-                    <div className="p-4 bg-amber-50 border border-amber-200 rounded-2xl flex items-start gap-3">
-                      <AlertCircle className="text-amber-600 shrink-0 mt-0.5" size={18} />
-                      <div className="text-xs sm:text-sm text-amber-800">
-                        <p className="font-bold mb-1">管理員權限提醒</p>
-                        <p>未登入狀態下僅可新增預約。如需修改或刪除，請先登入管理員帳號。</p>
-                      </div>
-                    </div>
-                  )}
-
                   {isConflict && (
                     <div className="p-4 bg-rose-50 border border-rose-200 rounded-2xl flex items-start gap-3">
                       <AlertCircle className="text-rose-600 shrink-0 mt-0.5" size={18} />
