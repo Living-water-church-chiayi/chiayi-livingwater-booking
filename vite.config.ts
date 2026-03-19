@@ -7,7 +7,7 @@ export default defineConfig(({mode}) => {
   const env = loadEnv(mode, '.', '');
   return {
     plugins: [react(), tailwindcss()],
-    base: process.env.NODE_ENV === 'production' ? '/chiayi-livingwater-booking/' : '/',
+    base: '/',
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),

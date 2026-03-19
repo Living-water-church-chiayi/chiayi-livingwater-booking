@@ -498,19 +498,6 @@ function AppContent() {
       <header className="bg-white sticky top-0 z-10 border-b border-slate-100 shadow-sm">
         <div className="max-w-6xl mx-auto px-3 sm:px-6 lg:px-8 h-14 flex items-center justify-between gap-2">
           <div className="flex items-center min-w-0 gap-2">
-            <div className="w-8 h-8 sm:w-10 sm:h-10 shrink-0 bg-white rounded-lg overflow-hidden flex items-center justify-center">
-              <img 
-                src="logo.png" 
-                alt="Church Logo"
-                className="w-full h-full object-contain"
-                onError={(e) => {
-                  // 如果找不到本地檔案，則顯示一個漂亮的預設圖示或背景
-                  (e.target as HTMLImageElement).style.display = 'none';
-                  (e.target as HTMLImageElement).parentElement!.classList.add('bg-blue-600');
-                  (e.target as HTMLImageElement).parentElement!.innerHTML = '<span class="text-white text-xs font-bold">活水</span>';
-                }}
-              />
-            </div>
             <h1 className="text-base sm:text-xl font-bold tracking-tight text-slate-900 truncate">嘉義活水貴格會場地借用</h1>
           </div>
           
@@ -559,6 +546,20 @@ function AppContent() {
                 )}
               </div>
             )}
+
+            {/* Logo 移至右上角 */}
+            <div className="w-8 h-8 sm:w-10 sm:h-10 shrink-0 bg-white rounded-lg overflow-hidden flex items-center justify-center ml-1 sm:ml-2">
+              <img 
+                src="/logo.png" 
+                alt="Church Logo"
+                className="w-full h-full object-contain"
+                onError={(e) => {
+                  (e.target as HTMLImageElement).style.display = 'none';
+                  (e.target as HTMLImageElement).parentElement!.classList.add('bg-blue-600');
+                  (e.target as HTMLImageElement).parentElement!.innerHTML = '<span class="text-white text-xs font-bold">活水</span>';
+                }}
+              />
+            </div>
           </div>
         </div>
       </header>
