@@ -59,7 +59,8 @@ service cloud.firestore {
 
     function isAdmin() {
       return isAuthenticated() &&
-        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
           (request.auth.token.email == "2273877@gmail.com" && request.auth.token.email_verified == true));
     }
 
@@ -68,13 +69,13 @@ service cloud.firestore {
     // ===============================================================
 
     match /bookings/{bookingId} {
-      // Anyone can read bookings
-      allow read: if true;
+      // Anyone can read bookings (get and list)
+      allow read, list: if true;
       
       // Anyone can create a booking (anonymous or logged in)
       allow create: if isValidBookingAnonymous(request.resource.data);
       
-      // Only admin can update/delete (to prevent unauthorized changes)
+      // Only admin can update/delete
       allow update, delete: if isAdmin();
     }
 

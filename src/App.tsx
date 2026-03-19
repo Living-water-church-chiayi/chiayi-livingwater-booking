@@ -500,7 +500,7 @@ function AppContent() {
           <div className="flex items-center min-w-0 gap-2">
             <div className="w-8 h-8 sm:w-10 sm:h-10 shrink-0 bg-white rounded-lg overflow-hidden flex items-center justify-center">
               <img 
-                src="/logo.png" 
+                src="logo.png" 
                 alt="Church Logo"
                 className="w-full h-full object-contain"
                 onError={(e) => {

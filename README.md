@@ -45,3 +45,6 @@
 ## 📄 授權
 
 MIT License
+
+---
+*Last updated to force Git sync: 2026-03-19*
