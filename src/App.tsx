@@ -179,12 +179,28 @@ export default function App() {
 }
 
 function AppContent() {
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'calendar'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'calendar'>('calendar');
   const [bookings, setBookings] = useState<Booking[]>([]);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [currentDate, setCurrentDate] = useState(new Date());
   const [editingId, setEditingId] = useState<string | null>(null);
   const [selectedDateStr, setSelectedDateStr] = useState(getTodayStr());
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // --- 防止 Modal 開啟時背景滾動 ---
+  useEffect(() => {
+    if (isModalOpen) {
+      document.body.style.overflow = 'hidden';
+      document.body.style.overscrollBehavior = 'none';
+    } else {
+      document.body.style.overflow = 'unset';
+      document.body.style.overscrollBehavior = 'auto';
+    }
+    return () => {
+      document.body.style.overflow = 'unset';
+      document.body.style.overscrollBehavior = 'auto';
+    };
+  }, [isModalOpen]);
 
   // --- Firebase Firestore Real-time Sync ---
   useEffect(() => {
@@ -214,9 +230,18 @@ function AppContent() {
   const [selectedVenues, setSelectedVenues] = useState<string[]>(VENUES);
   
   const toggleVenueFilter = (venue: string) => {
-    setSelectedVenues(prev => 
-      prev.includes(venue) ? prev.filter(v => v !== venue) : [...prev, venue]
-    );
+    setSelectedVenues(prev => {
+      // 如果目前是全選狀態，點擊單一場地則變成「單選」
+      if (prev.length === VENUES.length) {
+        return [venue];
+      }
+      // 如果目前只有單選該場地，再次點擊則變成「全選」（重置）
+      if (prev.length === 1 && prev[0] === venue) {
+        return VENUES;
+      }
+      // 否則正常切換
+      return prev.includes(venue) ? prev.filter(v => v !== venue) : [...prev, venue];
+    });
   };
 
   // --- 複製 / 貼上功能 ---
@@ -289,12 +314,15 @@ function AppContent() {
     endTime: '12:00',
     borrower: '',
     purpose: '',
-    repeat: 'none', // 'none', 'weekly', 'biweekly'
-    repeatUntil: getTodayStr()
+    repeat: 'none', // 'none', 'daily', 'weekly', 'biweekly'
+    repeatUntil: getTodayStr(),
+    repeatForever: false
   });
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
-    const { name, value } = e.target;
+    const target = e.target;
+    const name = target.name;
+    const value = target.type === 'checkbox' ? (target as HTMLInputElement).checked : target.value;
     setFormData(prev => ({ ...prev, [name]: value }));
   };
 
@@ -318,14 +346,15 @@ function AppContent() {
     }
   }, [formData.date, editingId]);
 
-  const openBookingModal = (venueOrBooking: string | Booking = VENUES[0], isEditing = false, specificDate: string | null = null) => {
+  const openBookingModal = (venueOrBooking?: string | Booking, isEditing = false, specificDate: string | null = null) => {
     if (specificDate) setSelectedDateStr(specificDate);
     
     if (isEditing && typeof venueOrBooking === 'object') {
       setFormData({
         ...venueOrBooking,
         repeat: 'none',
-        repeatUntil: venueOrBooking.date
+        repeatUntil: venueOrBooking.date,
+        repeatForever: false
       });
       setEditingId(venueOrBooking.id);
     } else {
@@ -335,15 +364,18 @@ function AppContent() {
       if (endHour >= 24) endHour = 23;
       const defaultEnd = `${endHour.toString().padStart(2, '0')}:00`;
 
+      const defaultVenue = selectedVenues.length === 1 ? selectedVenues[0] : VENUES[0];
+
       setFormData({
-        venue: typeof venueOrBooking === 'string' ? venueOrBooking : VENUES[0],
+        venue: typeof venueOrBooking === 'string' ? venueOrBooking : defaultVenue,
         date: defaultDate,
         startTime: defaultStart,
         endTime: defaultEnd,
         borrower: '',
         purpose: '',
         repeat: 'none',
-        repeatUntil: defaultDate
+        repeatUntil: defaultDate,
+        repeatForever: false
       });
       setEditingId(null);
     }
@@ -380,6 +412,9 @@ function AppContent() {
     }
     
     try {
+      setIsSubmitting(true);
+      let baseDateStr = formData.date;
+
       if (editingId) {
         // 編輯單筆
         const bookingRef = doc(db, 'bookings', editingId);
@@ -388,45 +423,62 @@ function AppContent() {
           uid: 'anonymous',
           authorName: '訪客'
         });
-        showToast('更新預約成功！', 'success');
       } else {
-        // 新增 (處理重複邏輯)
-        if (formData.repeat !== 'none') {
-          const endDate = new Date(formData.repeatUntil);
-          let currDateStr = formData.date;
-          const newBookingsData = [];
+        // 新增單筆
+        await addDoc(collection(db, 'bookings'), {
+          ...formData,
+          uid: 'anonymous',
+          authorName: '訪客',
+          createdAt: serverTimestamp()
+        });
+      }
 
-          let safetyCounter = 0; 
-          while (new Date(currDateStr) <= endDate && safetyCounter < 50) {
-            newBookingsData.push({ 
-              ...formData, 
-              date: currDateStr,
-              uid: 'anonymous',
-              authorName: '訪客',
-              createdAt: serverTimestamp()
-            });
+      // 處理重複邏輯 (不論新增或編輯，只要有選重複就會往後建立)
+      if (formData.repeat !== 'none') {
+        const getNextRepeatDate = (dateStr: string, repeatType: string) => {
+          const d = new Date(dateStr);
+          if (repeatType === 'daily') d.setDate(d.getDate() + 1);
+          else if (repeatType === 'weekly') d.setDate(d.getDate() + 7);
+          else if (repeatType === 'biweekly') d.setDate(d.getDate() + 14);
+          const offset = d.getTimezoneOffset();
+          return new Date(d.getTime() - (offset * 60 * 1000)).toISOString().split('T')[0];
+        };
 
-            const d = new Date(currDateStr);
-            d.setDate(d.getDate() + (formData.repeat === 'weekly' ? 7 : 14));
-            const offset = d.getTimezoneOffset();
-            currDateStr = new Date(d.getTime() - (offset * 60 * 1000)).toISOString().split('T')[0];
-            safetyCounter++;
-          }
+        let currDateStr = getNextRepeatDate(baseDateStr, formData.repeat);
+        
+        // 若選擇不結束重複，預設建立未來一年的預約
+        const endDate = formData.repeatForever 
+          ? new Date(new Date(baseDateStr).setFullYear(new Date(baseDateStr).getFullYear() + 1)) 
+          : new Date(formData.repeatUntil);
           
-          for (const data of newBookingsData) {
-            await addDoc(collection(db, 'bookings'), data);
-          }
-          showToast(`成功建立 ${newBookingsData.length} 筆預約！`, 'success');
-        } else {
-          await addDoc(collection(db, 'bookings'), {
-            ...formData,
+        const newBookingsData = [];
+        let safetyCounter = 0; 
+
+        while (new Date(currDateStr) <= endDate && safetyCounter < 365) {
+          newBookingsData.push({ 
+            ...formData, 
+            date: currDateStr,
             uid: 'anonymous',
             authorName: '訪客',
             createdAt: serverTimestamp()
           });
-          showToast('新增預約成功！', 'success');
+          currDateStr = getNextRepeatDate(currDateStr, formData.repeat);
+          safetyCounter++;
         }
+        
+        for (const data of newBookingsData) {
+          await addDoc(collection(db, 'bookings'), data);
+        }
+        
+        if (newBookingsData.length > 0) {
+          showToast(`已儲存並額外建立 ${newBookingsData.length} 筆重複預約！`, 'success');
+        } else {
+          showToast(editingId ? '更新預約成功！' : '新增預約成功！', 'success');
+        }
+      } else {
+        showToast(editingId ? '更新預約成功！' : '新增預約成功！', 'success');
       }
+      
       setIsModalOpen(false);
     } catch (error) {
       showToast('儲存失敗，請稍後再試！', 'error');
@@ -435,6 +487,8 @@ function AppContent() {
       } catch (e) {
         // ignore
       }
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -527,7 +581,7 @@ function AppContent() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-800 font-sans selection:bg-blue-100 pb-12 relative">
+    <div className="min-h-screen bg-slate-50 text-slate-800 font-sans selection:bg-blue-100 pb-12 relative overflow-x-hidden">
       
       {/* --- Toast 提示訊息 --- */}
       <AnimatePresence>
@@ -890,7 +944,7 @@ function AppContent() {
                   </div>
                 </div>
                 <button 
-                  onClick={() => openBookingModal(VENUES[0], false, selectedDateStr)}
+                  onClick={() => openBookingModal(undefined, false, selectedDateStr)}
                   className="flex items-center gap-1.5 text-xs sm:text-sm font-bold text-white bg-blue-600 px-3 py-1.5 sm:px-4 sm:py-2 rounded-xl hover:bg-blue-700 shadow-sm shadow-blue-600/20 active:scale-95 transition-all"
                 >
                   <Plus size={14} /> 新增預約
@@ -943,7 +997,7 @@ function AppContent() {
                     </div>
                     <p className="text-slate-400 font-medium">當日尚無預約</p>
                     <button 
-                      onClick={() => openBookingModal(VENUES[0], false, selectedDateStr)}
+                      onClick={() => openBookingModal(undefined, false, selectedDateStr)}
                       className="mt-4 text-blue-600 text-sm font-bold hover:text-blue-700 transition-colors"
                     >
                       立即為 {selectedDateStr} 新增預約
@@ -985,11 +1039,11 @@ function AppContent() {
                 </button>
               </div>
 
-              <div className="p-5 sm:p-6 overflow-y-auto custom-scrollbar space-y-5 sm:space-y-6">
+              <div className="p-5 sm:p-6 overflow-y-auto overflow-x-hidden custom-scrollbar space-y-5 sm:space-y-6">
                 
-                <form id="booking-form" onSubmit={handleSubmit} className="space-y-5 sm:space-y-6 relative z-10">
+                <form id="booking-form" onSubmit={handleSubmit} className="space-y-5 sm:space-y-6 relative z-10 w-full">
                   
-                  {isConflict && (
+                  {!isSubmitting && isConflict && (
                     <div className="p-4 bg-rose-50 border border-rose-200 rounded-2xl flex items-start gap-3">
                       <AlertCircle className="text-rose-600 shrink-0 mt-0.5" size={18} />
                       <div className="text-xs sm:text-sm text-rose-800">
@@ -1026,44 +1080,57 @@ function AppContent() {
                   </div>
 
                   {/* 衝突提醒 */}
-                  {checkConflict(formData.venue, formData.date, formData.startTime, formData.endTime, editingId) && (
+                  {!isSubmitting && checkConflict(formData.venue, formData.date, formData.startTime, formData.endTime, editingId) && (
                     <div className="p-3 bg-red-50 border border-red-100 rounded-xl flex items-center gap-2 text-red-600 animate-pulse">
                       <AlertCircle size={16} />
                       <span className="text-xs font-bold">注意：此時段場地已被預約，請確認是否衝突！</span>
                     </div>
                   )}
 
-                  {!editingId && (
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 p-4 bg-blue-50/50 border border-blue-100 rounded-2xl">
-                      <div className="space-y-1.5">
-                        <label className="text-xs sm:text-sm font-semibold text-slate-700">重複設定</label>
-                        <select 
-                          name="repeat"
-                          value={formData.repeat}
-                          onChange={handleInputChange}
-                          className="w-full px-4 py-2 sm:py-2.5 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600 transition-all outline-none text-sm"
-                        >
-                          <option value="none">不重複</option>
-                          <option value="weekly">每週重複</option>
-                          <option value="biweekly">每兩週重複</option>
-                        </select>
-                      </div>
-                      {formData.repeat !== 'none' && (
-                        <div className="space-y-1.5 animate-in fade-in slide-in-from-left-2">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 p-4 bg-blue-50/50 border border-blue-100 rounded-2xl">
+                    <div className="space-y-1.5">
+                      <label className="text-xs sm:text-sm font-semibold text-slate-700">重複設定</label>
+                      <select 
+                        name="repeat"
+                        value={formData.repeat}
+                        onChange={handleInputChange}
+                        className="w-full px-4 py-2 sm:py-2.5 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600 transition-all outline-none text-sm"
+                      >
+                        <option value="none">不重複</option>
+                        <option value="daily">每天重複</option>
+                        <option value="weekly">每週重複</option>
+                        <option value="biweekly">每兩週重複</option>
+                      </select>
+                    </div>
+                    {formData.repeat !== 'none' && (
+                      <div className="space-y-1.5 animate-in fade-in slide-in-from-left-2">
+                        <div className="flex items-center justify-between">
                           <label className="text-xs sm:text-sm font-semibold text-slate-700">結束重複日期</label>
+                          <label className="flex items-center gap-1.5 text-xs text-slate-600 cursor-pointer">
+                            <input 
+                              type="checkbox" 
+                              name="repeatForever"
+                              checked={formData.repeatForever}
+                              onChange={handleInputChange}
+                              className="rounded border-slate-300 text-blue-600 focus:ring-blue-600"
+                            />
+                            不結束 (建立一年份)
+                          </label>
+                        </div>
+                        {!formData.repeatForever && (
                           <input 
                             type="date" 
                             name="repeatUntil"
-                            required={formData.repeat !== 'none'}
+                            required={!formData.repeatForever}
                             value={formData.repeatUntil}
                             min={formData.date}
                             onChange={handleInputChange}
                             className="w-full px-4 py-2 sm:py-2.5 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600 transition-all outline-none text-sm"
                           />
-                        </div>
-                      )}
-                    </div>
-                  )}
+                        )}
+                      </div>
+                    )}
+                  </div>
 
                   <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100 space-y-4">
                     <div className="space-y-1.5">
@@ -1158,10 +1225,15 @@ function AppContent() {
                   <button 
                     type="submit"
                     form="booking-form"
-                    className="px-4 py-2 sm:px-5 sm:py-2.5 text-xs sm:text-sm font-semibold text-white bg-blue-600 hover:bg-blue-700 shadow-sm shadow-blue-600/20 rounded-xl transition-colors flex items-center gap-1.5"
+                    disabled={isSubmitting}
+                    className="px-4 py-2 sm:px-5 sm:py-2.5 text-xs sm:text-sm font-semibold text-white bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 shadow-sm shadow-blue-600/20 rounded-xl transition-colors flex items-center gap-1.5"
                   >
-                    <CheckCircle2 size={14} className="sm:w-4 sm:h-4" />
-                    <span>{editingId ? '儲存' : '確認'}</span>
+                    {isSubmitting ? (
+                      <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                    ) : (
+                      <CheckCircle2 size={14} className="sm:w-4 sm:h-4" />
+                    )}
+                    <span>{isSubmitting ? '處理中...' : (editingId ? '儲存' : '確認')}</span>
                   </button>
                 </div>
               </div>
