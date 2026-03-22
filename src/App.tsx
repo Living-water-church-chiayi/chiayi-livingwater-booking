@@ -1104,7 +1104,7 @@ function AppContent() {
             {/* Logo 移至右上角 */}
             <div className="w-8 h-8 sm:w-10 sm:h-10 shrink-0 bg-white rounded-lg overflow-hidden flex items-center justify-center ml-1 sm:ml-2">
               <img 
-                src="/logo.png" 
+                src="/logo.svg" 
                 alt="Church Logo"
                 className="w-full h-full object-contain"
                 onError={(e) => {
