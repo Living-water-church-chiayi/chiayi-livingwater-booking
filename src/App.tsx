@@ -40,7 +40,6 @@ import {
   query, 
   orderBy, 
   getDocs,
-  where,
   Timestamp,
   serverTimestamp,
   writeBatch
@@ -111,6 +110,9 @@ const VENUES = [
   '副堂', '3F幼幼班', '3F會議室', '3F大空間', '4F'
 ];
 
+const CHURCH_WIDE_VENUE = '全教會';
+
+type BookingType = 'standard' | 'sunday-service' | 'special-service';
 
 // 針對不同場地設定專屬顏色
 const VENUE_COLORS: Record<string, string> = {
@@ -146,6 +148,27 @@ const PURPOSE_PRESETS = [
   '小組聚會', '主日敬拜團', '各部開會', '個人安靜', '場地維護'
 ];
 
+const CHURCH_WIDE_PURPOSE_PRESETS = [
+  '主日聚會', '特別聚會', '聯合聚會', '培靈會', '佈道會'
+];
+
+const BOOKING_TYPE_LABELS: Record<BookingType, string> = {
+  standard: '一般場地借用',
+  'sunday-service': '主日聚會',
+  'special-service': '特別聚會'
+};
+
+const CHURCH_WIDE_TYPE_BADGES: Record<Exclude<BookingType, 'standard'>, string> = {
+  'sunday-service': '主日聚會',
+  'special-service': '特別聚會'
+};
+
+const CHURCH_WIDE_TYPE_DEFAULT_PURPOSE: Record<BookingType, string> = {
+  standard: '',
+  'sunday-service': '主日聚會',
+  'special-service': '特別聚會'
+};
+
 const ADMIN_PASSWORD = '04852591';
 const ADMIN_SESSION_KEY = 'venue-admin-authenticated';
 
@@ -159,6 +182,7 @@ const getTodayStr = () => {
 
 interface Booking {
   id: string;
+  bookingType?: BookingType;
   venue: string;
   date: string;
   startTime: string;
@@ -177,6 +201,7 @@ interface Booking {
 type RepeatType = 'none' | 'daily' | 'weekly' | 'biweekly';
 
 interface BookingFormData {
+  bookingType: BookingType;
   venue: string;
   date: string;
   startTime: string;
@@ -216,6 +241,64 @@ const addYearsToDateStr = (dateStr: string, years: number) => {
 
 const isTimeOverlap = (startA: string, endA: string, startB: string, endB: string) => {
   return (startA < endB) && (endA > startB);
+};
+
+const isChurchWideBookingType = (bookingType?: BookingType) => (
+  bookingType === 'sunday-service' || bookingType === 'special-service'
+);
+
+const getBookingType = (booking: Pick<Booking, 'bookingType'>): BookingType => booking.bookingType || 'standard';
+
+const isChurchWideBooking = (booking: Pick<Booking, 'bookingType'>) => isChurchWideBookingType(getBookingType(booking));
+
+const getBookingTypeLabel = (bookingType?: BookingType) => BOOKING_TYPE_LABELS[bookingType || 'standard'];
+
+const getBookingVenueLabel = (booking: Pick<Booking, 'bookingType' | 'venue'>) => (
+  isChurchWideBooking(booking) ? CHURCH_WIDE_VENUE : booking.venue
+);
+
+const getBookingCardClasses = (booking: Pick<Booking, 'bookingType' | 'venue'>) => (
+  isChurchWideBooking(booking)
+    ? 'bg-rose-50 border-rose-200 text-rose-700 hover:bg-rose-100 hover:border-rose-300'
+    : getVenueColor(booking.venue)
+);
+
+const getBookingDotClass = (booking: Pick<Booking, 'bookingType' | 'venue'>) => (
+  isChurchWideBooking(booking)
+    ? 'bg-rose-500'
+    : (VENUE_DOTS[booking.venue] || 'bg-slate-400')
+);
+
+const compareBookingsForDisplay = (a: Pick<Booking, 'date' | 'startTime' | 'bookingType'>, b: Pick<Booking, 'date' | 'startTime' | 'bookingType'>) => {
+  if (a.date !== b.date) return a.date.localeCompare(b.date);
+  if (a.startTime !== b.startTime) return a.startTime.localeCompare(b.startTime);
+  if (isChurchWideBooking(a) !== isChurchWideBooking(b)) return isChurchWideBooking(a) ? -1 : 1;
+  return 0;
+};
+
+const getPurposePresetsByType = (bookingType: BookingType) => (
+  isChurchWideBookingType(bookingType) ? CHURCH_WIDE_PURPOSE_PRESETS : PURPOSE_PRESETS
+);
+
+type ConflictCandidate = Pick<Booking, 'date' | 'startTime' | 'endTime' | 'venue' | 'bookingType'>;
+
+const getConflictingBookings = (
+  bookingList: Booking[],
+  candidate: ConflictCandidate,
+  excludeId: string | null,
+  ignoredIds: Set<string> = new Set()
+) => {
+  const candidateIsChurchWide = isChurchWideBookingType(candidate.bookingType);
+
+  return bookingList.filter((booking) => {
+    if (booking.id === excludeId) return false;
+    if (ignoredIds.has(booking.id)) return false;
+    if (booking.date !== candidate.date) return false;
+    if (!isTimeOverlap(candidate.startTime, candidate.endTime, booking.startTime, booking.endTime)) return false;
+
+    if (candidateIsChurchWide || isChurchWideBooking(booking)) return true;
+    return booking.venue === candidate.venue;
+  });
 };
 
 export default function App() {
@@ -288,15 +371,14 @@ function AppContent() {
     setTimeout(() => setToast({ show: false, message: '', type: 'success' }), 2000);
   };
 
-  const fetchVenueBookings = async (venue: string): Promise<Booking[]> => {
-    const q = query(collection(db, 'bookings'), where('venue', '==', venue));
-    const snapshot = await getDocs(q);
-    const venueBookings: Booking[] = [];
+  const fetchAllBookings = async (): Promise<Booking[]> => {
+    const snapshot = await getDocs(collection(db, 'bookings'));
+    const allBookings: Booking[] = [];
     snapshot.forEach((bookingDoc) => {
       const data = bookingDoc.data() as Omit<Booking, 'id'>;
-      venueBookings.push({ ...data, id: bookingDoc.id });
+      allBookings.push({ ...data, id: bookingDoc.id });
     });
-    return venueBookings;
+    return allBookings;
   };
 
   const toggleAdminAuth = () => {
@@ -388,7 +470,7 @@ function AppContent() {
   const handleCopy = (booking: Booking) => {
     setClipboardBooking(booking);
     setShowClipboardHint(true);
-    showToast(`已複製「${booking.venue} - ${booking.purpose}」，請點擊日期貼上`, 'success');
+    showToast(`已複製「${getBookingVenueLabel(booking)} - ${booking.purpose}」，請點擊日期貼上`, 'success');
     
     // 1.5 秒後自動隱藏下方黑色提示
     setTimeout(() => setShowClipboardHint(false), 1500);
@@ -413,13 +495,23 @@ function AppContent() {
     }
 
     try {
-      const liveVenueBookings = await fetchVenueBookings(clipboardBooking.venue);
-      const hasConflict = liveVenueBookings.some(b => {
-        if (b.date !== dateStr) return false;
-        return isTimeOverlap(clipboardBooking.startTime, clipboardBooking.endTime, b.startTime, b.endTime);
-      });
-      if (hasConflict) {
-        showToast(`貼上失敗：${dateStr} 的時段已有衝突！`, 'error');
+      const liveBookings = await fetchAllBookings();
+      const conflicts = getConflictingBookings(liveBookings, {
+        bookingType: getBookingType(clipboardBooking),
+        venue: clipboardBooking.venue,
+        date: dateStr,
+        startTime: clipboardBooking.startTime,
+        endTime: clipboardBooking.endTime
+      }, null);
+
+      if (conflicts.length > 0) {
+        const churchWideConflict = conflicts.find(isChurchWideBooking);
+        showToast(
+          churchWideConflict
+            ? `貼上失敗：${dateStr} 有全教會聚會，該時段全空間暫停借用！`
+            : `貼上失敗：${dateStr} 的時段已有衝突！`,
+          'error'
+        );
         return;
       }
 
@@ -456,6 +548,7 @@ function AppContent() {
   };
 
   const [formData, setFormData] = useState<BookingFormData>({
+    bookingType: 'standard',
     venue: VENUES[0],
     date: getTodayStr(),
     startTime: '10:00',
@@ -473,6 +566,21 @@ function AppContent() {
     const value = target.type === 'checkbox' ? (target as HTMLInputElement).checked : target.value;
     setFormData(prev => {
       const next = { ...prev, [name]: value } as BookingFormData;
+      if (name === 'bookingType') {
+        const nextType = value as BookingType;
+        const previousDefaultPurpose = CHURCH_WIDE_TYPE_DEFAULT_PURPOSE[prev.bookingType];
+        const nextDefaultPurpose = CHURCH_WIDE_TYPE_DEFAULT_PURPOSE[nextType];
+
+        if (isChurchWideBookingType(nextType)) {
+          next.venue = CHURCH_WIDE_VENUE;
+        } else if (prev.venue === CHURCH_WIDE_VENUE) {
+          next.venue = selectedVenues.length === 1 ? selectedVenues[0] : VENUES[0];
+        }
+
+        if (!prev.purpose || prev.purpose === previousDefaultPurpose) {
+          next.purpose = nextDefaultPurpose;
+        }
+      }
       if (name === 'date' && next.repeatUntil < String(value)) {
         next.repeatUntil = String(value);
       }
@@ -538,6 +646,7 @@ function AppContent() {
           : seriesLastDate);
 
       setFormData({
+        bookingType: getBookingType(venueOrBooking),
         venue: venueOrBooking.venue,
         date: venueOrBooking.date,
         startTime: venueOrBooking.startTime,
@@ -559,6 +668,7 @@ function AppContent() {
       const defaultVenue = selectedVenues.length === 1 ? selectedVenues[0] : VENUES[0];
 
       setFormData({
+        bookingType: 'standard',
         venue: typeof venueOrBooking === 'string' ? venueOrBooking : defaultVenue,
         date: defaultDate,
         startTime: defaultStart,
@@ -623,8 +733,8 @@ function AppContent() {
       let baseDateStr = formData.date;
       const originalBooking = editingId ? bookings.find(b => b.id === editingId) : null;
       
-      // 1. 先從 Firestore 重新取得該場地資料，避免使用過舊的本地狀態
-      const venueBookings = await fetchVenueBookings(formData.venue);
+      // 1. 先從 Firestore 重新取得最新資料，避免使用過舊的本地狀態
+      const liveBookings = await fetchAllBookings();
       const deletedFutureIds = new Set<string>();
       if (applyToFuture && originalBooking?.groupId) {
         bookings
@@ -632,25 +742,32 @@ function AppContent() {
           .forEach(b => deletedFutureIds.add(b.id));
       }
       
-      const checkConflictOptimized = (date: string, start: string, end: string, excludeId: string | null, ignoredIds: Set<string> = new Set()) => {
-        return venueBookings.some(b => {
-          if (b.id === excludeId) return false;
-          if (ignoredIds.has(b.id)) return false;
-          if (b.date !== date) return false;
-          return isTimeOverlap(start, end, b.startTime, b.endTime);
-        });
-      };
+      const checkConflictOptimized = (date: string, start: string, end: string, excludeId: string | null, ignoredIds: Set<string> = new Set()) => (
+        getConflictingBookings(liveBookings, {
+          bookingType: formData.bookingType,
+          venue: formData.venue,
+          date,
+          startTime: start,
+          endTime: end
+        }, excludeId, ignoredIds)
+      );
 
       // 檢查主預約是否有衝突
-      const mainConflict = checkConflictOptimized(
+      const mainConflicts = checkConflictOptimized(
         formData.date, 
         formData.startTime, 
         formData.endTime, 
         editingId, 
         deletedFutureIds
       );
-      if (mainConflict) {
-        showToast(`預約失敗：${formData.date} 的時段已有衝突！`, 'error');
+      if (mainConflicts.length > 0) {
+        const churchWideConflict = mainConflicts.find(isChurchWideBooking);
+        showToast(
+          churchWideConflict
+            ? `預約失敗：${formData.date} 有全教會聚會，該時段全空間暫停借用！`
+            : `預約失敗：${formData.date} 的時段已有衝突！`,
+          'error'
+        );
         setIsSubmitting(false);
         return;
       }
@@ -671,15 +788,21 @@ function AppContent() {
         let safetyCounter = 0; 
 
         while (currDateStr <= endDateStr && safetyCounter < 370) {
-          const conflict = checkConflictOptimized(
+          const conflicts = checkConflictOptimized(
             currDateStr, 
             formData.startTime, 
             formData.endTime, 
             null, 
             deletedFutureIds
           );
-          if (conflict) {
-            showToast(`預約失敗：重複日程中的 ${currDateStr} 已有衝突！`, 'error');
+          if (conflicts.length > 0) {
+            const churchWideConflict = conflicts.find(isChurchWideBooking);
+            showToast(
+              churchWideConflict
+                ? `預約失敗：重複日程中的 ${currDateStr} 有全教會聚會，該時段全空間暫停借用！`
+                : `預約失敗：重複日程中的 ${currDateStr} 已有衝突！`,
+              'error'
+            );
             setIsSubmitting(false);
             return;
           }
@@ -820,7 +943,7 @@ function AppContent() {
 
     // 1. 找出目前正在進行的
     const active = bookings.find(b => 
-      b.venue === venueName && 
+      (isChurchWideBooking(b) || b.venue === venueName) &&
       b.date === today && 
       b.startTime <= currentTimeStr && 
       b.endTime >= currentTimeStr
@@ -828,16 +951,13 @@ function AppContent() {
 
     // 2. 找出下一個預約 (可能是今天稍後，也可能是未來某天)
     const futureBookings = bookings
-      .filter(b => b.venue === venueName)
+      .filter(b => isChurchWideBooking(b) || b.venue === venueName)
       .filter(b => {
         if (b.date > today) return true;
         if (b.date === today && b.startTime > currentTimeStr) return true;
         return false;
       })
-      .sort((a, b) => {
-        if (a.date !== b.date) return a.date.localeCompare(b.date);
-        return a.startTime.localeCompare(b.startTime);
-      });
+      .sort(compareBookingsForDisplay);
 
     const next = futureBookings[0] || null;
 
@@ -845,24 +965,19 @@ function AppContent() {
   };
 
   // 檢查是否有衝突
-  const checkConflict = (venue: string, date: string, start: string, end: string, excludeId: string | null) => {
-    return bookings.some(b => {
-      if (b.id === excludeId) return false;
-      if (b.venue !== venue || b.date !== date) return false;
-      
-      // 檢查時間重疊
-      // (StartA < EndB) && (EndA > StartB)
-      return isTimeOverlap(start, end, b.startTime, b.endTime);
-    });
-  };
-
-  const isConflict = checkConflict(
-    formData.venue, 
-    formData.date, 
-    formData.startTime, 
-    formData.endTime, 
+  const conflicts = getConflictingBookings(
+    bookings,
+    {
+      bookingType: formData.bookingType,
+      venue: formData.venue,
+      date: formData.date,
+      startTime: formData.startTime,
+      endTime: formData.endTime
+    },
     editingId
   );
+  const isConflict = conflicts.length > 0;
+  const hasChurchWideConflict = conflicts.some(isChurchWideBooking);
 
   const daysInMonth = new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 0).getDate();
   const firstDayOfMonth = new Date(currentDate.getFullYear(), currentDate.getMonth(), 1).getDay();
@@ -886,9 +1001,21 @@ function AppContent() {
   const getBookingsForDate = (day: number) => {
     const dateStr = `${currentDate.getFullYear()}-${String(currentDate.getMonth() + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
     return bookings
-      .filter(b => b.date === dateStr && selectedVenues.includes(b.venue))
-      .sort((a, b) => a.startTime.localeCompare(b.startTime));
+      .filter(b => b.date === dateStr && (isChurchWideBooking(b) || selectedVenues.includes(b.venue)))
+      .sort(compareBookingsForDisplay);
   };
+
+  const getChurchWideBookingsForDate = (dateStr: string) => (
+    bookings
+      .filter(b => b.date === dateStr && isChurchWideBooking(b))
+      .sort(compareBookingsForDisplay)
+  );
+
+  const todayChurchWideBookings = getChurchWideBookingsForDate(getTodayStr());
+  const selectedDateBookings = bookings
+    .filter(b => b.date === selectedDateStr && (isChurchWideBooking(b) || selectedVenues.includes(b.venue)))
+    .sort(compareBookingsForDisplay);
+  const selectedDateChurchWideBookings = selectedDateBookings.filter(isChurchWideBooking);
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 font-sans selection:bg-blue-100 pb-12 relative overflow-x-hidden">
@@ -921,7 +1048,7 @@ function AppContent() {
             className="fixed bottom-24 left-1/2 z-40 bg-slate-800 text-white px-5 py-3 rounded-2xl shadow-xl flex items-center gap-3"
           >
             <Copy size={16} className="text-blue-400" />
-            <span className="text-sm">已複製：{clipboardBooking.venue} ({clipboardBooking.startTime})</span>
+            <span className="text-sm">已複製：{getBookingVenueLabel(clipboardBooking)} ({clipboardBooking.startTime})</span>
             <button 
               onClick={() => setShowClipboardHint(false)}
               className="ml-2 p-1 bg-slate-700 hover:bg-slate-600 rounded-lg transition-colors"
@@ -1008,10 +1135,34 @@ function AppContent() {
               </div>
             </div>
 
+            {todayChurchWideBookings.length > 0 && (
+              <div className="mb-6 rounded-2xl border border-rose-200 bg-rose-50 p-4 sm:p-5">
+                <div className="flex items-start gap-3">
+                  <AlertCircle className="text-rose-600 shrink-0 mt-0.5" size={18} />
+                  <div className="min-w-0">
+                    <p className="font-bold text-rose-900">今日有全教會聚會時段</p>
+                    <p className="text-xs sm:text-sm text-rose-700 mt-1">遇到主日聚會或特別聚會時，所有空間同步停止借用。</p>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {todayChurchWideBookings.map((booking) => (
+                        <div key={booking.id} className="rounded-xl border border-rose-200 bg-white/80 px-3 py-2 text-xs sm:text-sm text-rose-800">
+                          <span className="font-bold">{CHURCH_WIDE_TYPE_BADGES[getBookingType(booking) as Exclude<BookingType, 'standard'>]}</span>
+                          <span className="mx-2 text-rose-300">•</span>
+                          <span>{booking.startTime} - {booking.endTime}</span>
+                          <span className="mx-2 text-rose-300">•</span>
+                          <span>{booking.borrower}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
               {VENUES.map(venue => {
                 const { active, next } = getVenueNextSchedule(venue);
                 const isOccupied = !!active;
+                const isChurchWideActive = !!active && isChurchWideBooking(active);
 
                 return (
                   <div key={venue} className="bg-white rounded-2xl p-4 sm:p-5 border border-slate-100 shadow-sm hover:shadow-md transition-shadow relative flex flex-col h-full group">
@@ -1029,19 +1180,24 @@ function AppContent() {
                       </button>
                       
                       <span className={`px-2 py-0.5 rounded-full text-[10px] sm:text-xs font-medium flex items-center gap-1 whitespace-nowrap shrink-0
-                        ${isOccupied ? 'bg-amber-50 text-amber-600 border border-amber-200/50' : 'bg-emerald-50 text-emerald-600 border border-emerald-200/50'}`}>
-                        <span className={`w-1 h-1 sm:w-1.5 sm:h-1.5 rounded-full ${isOccupied ? 'bg-amber-500 animate-pulse' : 'bg-emerald-500'}`}></span>
-                        {isOccupied ? '使用中' : '空閒'}
+                        ${isChurchWideActive ? 'bg-rose-50 text-rose-600 border border-rose-200/60' : isOccupied ? 'bg-amber-50 text-amber-600 border border-amber-200/50' : 'bg-emerald-50 text-emerald-600 border border-emerald-200/50'}`}>
+                        <span className={`w-1 h-1 sm:w-1.5 sm:h-1.5 rounded-full ${isChurchWideActive ? 'bg-rose-500 animate-pulse' : isOccupied ? 'bg-amber-500 animate-pulse' : 'bg-emerald-500'}`}></span>
+                        {isChurchWideActive ? '聚會時段' : isOccupied ? '使用中' : '空閒'}
                       </span>
                     </div>
 
                     <div className="flex-1 flex flex-col gap-3">
                       {active ? (
-                        <div className={`border rounded-xl p-3 text-sm relative group/edit transition-colors ${getVenueColor(venue)}`}>
+                        <div className={`border rounded-xl p-3 text-sm relative group/edit transition-colors ${getBookingCardClasses(active)}`}>
                           <div className="flex items-center gap-2 font-medium mb-1.5">
                             <Clock size={14} className="opacity-70" />
                             <span>{active.startTime} - {active.endTime}</span>
                           </div>
+                          {isChurchWideBooking(active) && (
+                            <div className="mb-2 inline-flex rounded-full bg-white/80 px-2 py-1 text-[10px] font-bold text-rose-700">
+                              {CHURCH_WIDE_TYPE_BADGES[getBookingType(active) as Exclude<BookingType, 'standard'>]} · 全教會聚會時段
+                            </div>
+                          )}
                           <div className="flex items-center gap-2 mb-1.5">
                             <Users size={14} className="opacity-70" />
                             <span className="font-medium">{active.borrower}</span>
@@ -1085,7 +1241,9 @@ function AppContent() {
                                 <span className="text-[10px] bg-slate-100 px-1.5 py-0.5 rounded text-slate-500">{next.date === getTodayStr() ? '今日' : next.date.split('-').slice(1).join('/')}</span>
                                 <span>{next.startTime} - {next.endTime}</span>
                               </div>
-                              <div className="text-slate-500 text-xs mt-0.5 truncate">{next.borrower} · {next.purpose}</div>
+                              <div className="text-slate-500 text-xs mt-0.5 truncate">
+                                {isChurchWideBooking(next) ? `${CHURCH_WIDE_TYPE_BADGES[getBookingType(next) as Exclude<BookingType, 'standard'>]} · 全教會聚會時段` : getBookingVenueLabel(next)} · {next.borrower}
+                              </div>
                             </div>
                             <div className="flex gap-1 opacity-0 group-hover/edit:opacity-100 transition-all shrink-0 ml-2">
                               <button 
@@ -1186,6 +1344,9 @@ function AppContent() {
                   </button>
                 );
               })}
+              <div className="px-2 py-0.5 sm:px-2.5 sm:py-1 rounded-full text-[9px] sm:text-[11px] font-medium whitespace-nowrap border border-rose-200 bg-rose-50 text-rose-700 shrink-0">
+                全教會聚會時段會自動顯示
+              </div>
             </div>
 
             {/* 月曆網格 - 簡約點點顯示模式 */}
@@ -1205,6 +1366,8 @@ function AppContent() {
                   const day = i + 1;
                   const dateStr = `${currentDate.getFullYear()}-${String(currentDate.getMonth() + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
                   const dayBookings = getBookingsForDate(day);
+                  const dayChurchWideBookings = dayBookings.filter(isChurchWideBooking);
+                  const hasChurchWideBooking = dayChurchWideBookings.length > 0;
                   const isToday = getTodayStr() === dateStr;
                   const isSelected = selectedDateStr === dateStr;
                   
@@ -1222,19 +1385,24 @@ function AppContent() {
                           }, 100);
                         }
                       }}
-                      className={`bg-white min-h-[40px] sm:min-h-[60px] p-1 sm:p-1.5 border-t border-slate-100 transition-all hover:bg-blue-50/20 cursor-pointer group/day relative flex flex-col items-center justify-start ${isToday ? 'bg-blue-50/30' : ''} ${isSelected ? 'ring-2 ring-inset ring-blue-500/50 bg-blue-50/10' : ''}`}
+                      className={`bg-white min-h-[40px] sm:min-h-[60px] p-1 sm:p-1.5 border-t border-slate-100 transition-all hover:bg-blue-50/20 cursor-pointer group/day relative flex flex-col items-center justify-start ${hasChurchWideBooking ? 'bg-rose-50/40' : ''} ${isToday ? 'bg-blue-50/30' : ''} ${isSelected ? 'ring-2 ring-inset ring-blue-500/50 bg-blue-50/10' : ''}`}
                     >
                       <span className={`inline-flex items-center justify-center w-5 h-5 sm:w-6 sm:h-6 rounded-full text-[10px] sm:text-xs font-medium mb-0.5 sm:mb-1 transition-colors ${isToday ? 'bg-blue-600 text-white shadow-sm' : isSelected ? 'bg-blue-100 text-blue-700' : 'text-slate-700 group-hover/day:text-blue-600'}`}>
                         {day}
                       </span>
+                      {hasChurchWideBooking && (
+                        <div className="mb-0.5 rounded-full bg-rose-100 px-1.5 py-0.5 text-[7px] sm:text-[9px] font-bold text-rose-700 leading-none">
+                          保留
+                        </div>
+                      )}
                       
                       {/* 預約點點指示器 */}
                       <div className="flex flex-wrap justify-center gap-0.5 sm:gap-1 max-w-full px-0.5">
                         {dayBookings.slice(0, 8).map((b, idx) => (
                           <div 
                             key={idx} 
-                            className={`w-1 h-1 sm:w-1.5 sm:h-1.5 rounded-full shadow-sm ${VENUE_DOTS[b.venue] || 'bg-slate-400'}`}
-                            title={`${b.startTime} ${b.venue}`}
+                            className={`w-1 h-1 sm:w-1.5 sm:h-1.5 rounded-full shadow-sm ${getBookingDotClass(b)}`}
+                            title={`${b.startTime} ${getBookingVenueLabel(b)}`}
                           />
                         ))}
                         {dayBookings.length > 8 && (
@@ -1249,7 +1417,7 @@ function AppContent() {
                         <div className="hidden sm:group-hover/day:block absolute z-30 left-1/2 -translate-x-1/2 bottom-full mb-2 w-48 p-2 bg-slate-800 text-white rounded-lg shadow-xl text-[10px] pointer-events-none">
                           <p className="font-bold border-b border-slate-700 pb-1 mb-1">{dateStr}</p>
                           {dayBookings.slice(0, 3).map((b, idx) => (
-                            <p key={idx} className="truncate opacity-90">• {b.startTime} {b.venue}</p>
+                            <p key={idx} className="truncate opacity-90">• {b.startTime} {getBookingVenueLabel(b)}{isChurchWideBooking(b) ? ` · ${getBookingTypeLabel(getBookingType(b))}` : ''}</p>
                           ))}
                           {dayBookings.length > 3 && <p className="opacity-60 italic">還有 {dayBookings.length - 3} 筆...</p>}
                         </div>
@@ -1282,14 +1450,34 @@ function AppContent() {
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {bookings
-                  .filter(b => b.date === selectedDateStr && selectedVenues.includes(b.venue))
-                  .sort((a, b) => a.startTime.localeCompare(b.startTime))
-                  .map((b, idx) => (
+                {selectedDateChurchWideBookings.length > 0 && (
+                  <div className="col-span-full rounded-2xl border border-rose-200 bg-rose-50 p-4">
+                    <div className="flex items-start gap-3">
+                      <AlertCircle className="text-rose-600 shrink-0 mt-0.5" size={18} />
+                      <div>
+                        <p className="font-bold text-rose-900">此日期有全教會聚會時段</p>
+                        <p className="text-sm text-rose-700 mt-1">聚會時段內所有場地都不可借用，月曆會固定顯示這些事件。</p>
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          {selectedDateChurchWideBookings.map((booking) => (
+                            <div key={booking.id} className="rounded-xl border border-rose-200 bg-white/80 px-3 py-2 text-xs sm:text-sm text-rose-800">
+                              <span className="font-bold">{CHURCH_WIDE_TYPE_BADGES[getBookingType(booking) as Exclude<BookingType, 'standard'>]}</span>
+                              <span className="mx-2 text-rose-300">•</span>
+                              <span>{booking.startTime} - {booking.endTime}</span>
+                              <span className="mx-2 text-rose-300">•</span>
+                              <span>{booking.borrower}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {selectedDateBookings.map((b, idx) => (
                     <div 
                       key={`${b.id}-${idx}`} 
                       onClick={() => openBookingModal(b, true)}
-                      className={`p-4 rounded-2xl border shadow-sm flex flex-col gap-3 group cursor-pointer hover:shadow-md active:scale-[0.98] transition-all relative overflow-hidden ${getVenueColor(b.venue)}`}
+                      className={`p-4 rounded-2xl border shadow-sm flex flex-col gap-3 group cursor-pointer hover:shadow-md active:scale-[0.98] transition-all relative overflow-hidden ${getBookingCardClasses(b)}`}
                     >
                       <div className="flex justify-between items-start relative z-10">
                         <div className="flex items-center gap-2 font-bold text-sm text-slate-800">
@@ -1301,9 +1489,14 @@ function AppContent() {
                           <button onClick={(e) => {e.stopPropagation(); openBookingModal(b, true);}} className="p-1.5 bg-white/60 hover:bg-white rounded-lg transition-colors"><Edit2 size={14}/></button>
                         </div>
                       </div>
+                      {isChurchWideBooking(b) && (
+                        <div className="relative z-10 inline-flex w-fit rounded-full bg-white/80 px-2.5 py-1 text-[11px] font-bold text-rose-700">
+                          {CHURCH_WIDE_TYPE_BADGES[getBookingType(b) as Exclude<BookingType, 'standard'>]} · 全教會聚會時段
+                        </div>
+                      )}
                       <div className="flex items-center gap-2 text-sm font-bold text-slate-700 relative z-10">
                         <MapPin size={16} className="opacity-70" />
-                        <span>{b.venue}</span>
+                        <span>{getBookingVenueLabel(b)}</span>
                       </div>
                       <div className="flex items-center gap-2 text-sm text-slate-600 relative z-10">
                         <Users size={16} className="opacity-70" />
@@ -1320,7 +1513,7 @@ function AppContent() {
                     </div>
                   ))}
                 
-                {bookings.filter(b => b.date === selectedDateStr && selectedVenues.includes(b.venue)).length === 0 && (
+                {selectedDateBookings.length === 0 && (
                   <div className="col-span-full py-16 text-center border-2 border-dashed border-slate-100 rounded-3xl bg-slate-50/50">
                     <div className="w-16 h-16 bg-white rounded-full flex items-center justify-center mx-auto mb-4 shadow-sm">
                       <CalendarIcon size={24} className="text-slate-300" />
@@ -1378,8 +1571,29 @@ function AppContent() {
                       <AlertCircle className="text-rose-600 shrink-0 mt-0.5" size={18} />
                       <div className="text-xs sm:text-sm text-rose-800">
                         <p className="font-bold mb-1">時間衝突警告</p>
-                        <p>此時段該場地已有其他預約，請調整時間或場地。</p>
+                        <p>{hasChurchWideConflict ? '此時段已有全教會聚會，所有空間都不可借用。' : '此時段該場地已有其他預約，請調整時間或場地。'}</p>
                       </div>
+                    </div>
+                  )}
+
+                  <div className="space-y-1.5 min-w-0">
+                    <label className="text-xs sm:text-sm font-semibold text-slate-700">事件類型 <span className="text-red-500">*</span></label>
+                    <select
+                      name="bookingType"
+                      value={formData.bookingType}
+                      onChange={handleInputChange}
+                      className="w-full min-w-0 px-4 py-2 sm:py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600 transition-all outline-none text-sm"
+                    >
+                      <option value="standard">一般場地借用</option>
+                      <option value="sunday-service">主日聚會（全教會聚會時段）</option>
+                      <option value="special-service">特別聚會（全教會聚會時段）</option>
+                    </select>
+                  </div>
+
+                  {isChurchWideBookingType(formData.bookingType) && (
+                    <div className="p-4 rounded-2xl border border-amber-200 bg-amber-50 text-amber-900">
+                      <p className="font-bold text-sm">這是一筆全教會聚會時段</p>
+                      <p className="text-xs sm:text-sm mt-1">建立後，該時段所有空間都會停止借用，月曆與今日狀態也會特別標示。</p>
                     </div>
                   )}
 
@@ -1413,7 +1627,7 @@ function AppContent() {
                   {!isSubmitting && isConflict && (
                     <div className="p-3 bg-red-50 border border-red-100 rounded-xl flex items-center gap-2 text-red-600 animate-pulse">
                       <AlertCircle size={16} />
-                      <span className="text-xs font-bold">注意：此時段場地已被預約，請確認是否衝突！</span>
+                      <span className="text-xs font-bold">{hasChurchWideConflict ? '注意：此時段已有全教會聚會，所有場地都會被鎖定！' : '注意：此時段場地已被預約，請確認是否衝突！'}</span>
                     </div>
                   )}
 
@@ -1463,17 +1677,26 @@ function AppContent() {
                   </div>
 
                   <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100 space-y-4">
-                    <div className="space-y-1.5 min-w-0">
-                      <label className="text-xs sm:text-sm font-semibold text-slate-700">選擇場地 <span className="text-red-500">*</span></label>
-                      <select 
-                        name="venue"
-                        value={formData.venue}
-                        onChange={handleInputChange}
-                        className="w-full min-w-0 px-4 py-2 sm:py-2.5 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600 transition-all outline-none appearance-none cursor-pointer text-sm"
-                      >
-                        {VENUES.map(v => <option key={v} value={v}>{v}</option>)}
-                      </select>
-                    </div>
+                    {isChurchWideBookingType(formData.bookingType) ? (
+                      <div className="space-y-1.5 min-w-0">
+                        <label className="text-xs sm:text-sm font-semibold text-slate-700">適用範圍</label>
+                        <div className="w-full px-4 py-3 bg-white border border-rose-200 rounded-xl text-sm font-semibold text-rose-700">
+                          {CHURCH_WIDE_VENUE}（所有場地同步停止借用）
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="space-y-1.5 min-w-0">
+                        <label className="text-xs sm:text-sm font-semibold text-slate-700">選擇場地 <span className="text-red-500">*</span></label>
+                        <select 
+                          name="venue"
+                          value={formData.venue}
+                          onChange={handleInputChange}
+                          className="w-full min-w-0 px-4 py-2 sm:py-2.5 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600 transition-all outline-none appearance-none cursor-pointer text-sm"
+                        >
+                          {VENUES.map(v => <option key={v} value={v}>{v}</option>)}
+                        </select>
+                      </div>
+                    )}
 
                     <div className="grid grid-cols-2 gap-3 sm:gap-4">
                       <div className="space-y-1.5 min-w-0">
@@ -1504,7 +1727,7 @@ function AppContent() {
                   <div className="space-y-3 min-w-0">
                     <label className="text-xs sm:text-sm font-semibold text-slate-700">借用用途 <span className="text-red-500">*</span></label>
                     <div className="flex flex-wrap gap-1.5 mb-2">
-                      {PURPOSE_PRESETS.map(preset => (
+                      {getPurposePresetsByType(formData.bookingType).map(preset => (
                         <button
                           key={preset}
                           type="button"
