@@ -1,5 +1,11 @@
 @import "tailwindcss";
 
+html,
+body,
+#root {
+  touch-action: pan-x pan-y;
+}
+
 @layer utilities {
   .custom-scrollbar::-webkit-scrollbar {
     height: 6px;
@@ -19,6 +25,8 @@
     inline-size: 100%;
     max-inline-size: 100%;
     min-inline-size: 0;
+    overflow: visible;
+    background-clip: padding-box;
   }
 
   .input-safe-mobile::-webkit-date-and-time-value {

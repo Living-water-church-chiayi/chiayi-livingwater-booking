@@ -776,7 +776,30 @@ function AppContent() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!effectiveFormData.borrower || !effectiveFormData.purpose) return;
+    if (!effectiveFormData.borrower.trim()) {
+      showToast('請填寫借用人 / 單位！', 'error');
+      return;
+    }
+
+    if (!effectiveFormData.date) {
+      showToast('請選擇日期！', 'error');
+      return;
+    }
+
+    if (!effectiveFormData.startTime || !effectiveFormData.endTime) {
+      showToast('請選擇開始與結束時間！', 'error');
+      return;
+    }
+
+    if (!effectiveFormData.purpose.trim()) {
+      showToast('請填寫借用用途！', 'error');
+      return;
+    }
+
+    if (effectiveFormData.repeat !== 'none' && !effectiveFormData.repeatForever && !effectiveFormData.repeatUntil) {
+      showToast('請選擇重複結束日期！', 'error');
+      return;
+    }
     
     const originalBooking = editingId ? bookings.find(b => b.id === editingId) : null;
     const isTimeChanged = !originalBooking || originalBooking.date !== effectiveFormData.date || originalBooking.startTime !== effectiveFormData.startTime;
@@ -1863,9 +1886,9 @@ function AppContent() {
                 </button>
               </div>
 
-              <div className="p-5 sm:p-6 overflow-y-auto overflow-x-hidden custom-scrollbar space-y-5 sm:space-y-6">
+              <div className="p-5 sm:p-6 overflow-y-auto custom-scrollbar space-y-5 sm:space-y-6">
                 
-                <form id="booking-form" onSubmit={handleSubmit} className="space-y-5 sm:space-y-6 relative z-10 w-full">
+                <form id="booking-form" noValidate onSubmit={handleSubmit} className="space-y-5 sm:space-y-6 relative z-10 w-full">
                   
                   {!isSubmitting && isConflict && (
                     <div className="p-4 bg-rose-50 border border-rose-200 rounded-2xl flex items-start gap-3">
@@ -1911,7 +1934,7 @@ function AppContent() {
                   )}
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <div className="space-y-1.5 min-w-0 overflow-hidden">
+                    <div className="space-y-1.5 min-w-0">
                       <label className="text-xs sm:text-sm font-semibold text-slate-700">借用人 / 單位 <span className="text-red-500">*</span></label>
                       <input 
                         type="text" 
@@ -1923,7 +1946,7 @@ function AppContent() {
                         className="w-full min-w-0 px-4 py-2 sm:py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600 transition-all outline-none text-sm"
                       />
                     </div>
-                    <div className="space-y-1.5 min-w-0 overflow-hidden">
+                    <div className="space-y-1.5 min-w-0">
                       <label className="text-xs sm:text-sm font-semibold text-slate-700">日期 <span className="text-red-500">*</span></label>
                       <input 
                         type="date" 
@@ -1984,7 +2007,7 @@ function AppContent() {
                             value={formData.repeatUntil}
                             min={formData.date}
                             onChange={handleInputChange}
-                            className="w-full min-w-0 min-h-[42px] sm:min-h-[44px] px-4 py-2 sm:py-2.5 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600 transition-all outline-none text-sm"
+                            className="input-safe-mobile w-full min-w-0 min-h-[42px] sm:min-h-[44px] px-4 py-2 sm:py-2.5 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600 transition-all outline-none text-sm"
                           />
                         )}
                       </div>
@@ -2014,7 +2037,7 @@ function AppContent() {
                     )}
 
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4 min-w-0">
-                      <div className="space-y-1.5 min-w-0 overflow-hidden">
+                      <div className="space-y-1.5 min-w-0">
                         <label className="text-xs sm:text-sm font-semibold text-slate-700">開始時間 <span className="text-red-500">*</span></label>
                         <input 
                           type="time" 
@@ -2027,7 +2050,7 @@ function AppContent() {
                           className="input-safe-mobile w-full max-w-full min-w-0 min-h-[42px] sm:min-h-[44px] px-3 sm:px-4 py-2 sm:py-2.5 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600 transition-all outline-none text-sm"
                         />
                       </div>
-                      <div className="space-y-1.5 min-w-0 overflow-hidden">
+                      <div className="space-y-1.5 min-w-0">
                         <label className="text-xs sm:text-sm font-semibold text-slate-700">結束時間 <span className="text-red-500">*</span></label>
                         <input 
                           type="time" 
