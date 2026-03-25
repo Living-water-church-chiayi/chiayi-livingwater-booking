@@ -148,27 +148,23 @@ const VENUE_DOTS: Record<string, string> = {
 const getVenueColor = (venue: string) => VENUE_COLORS[venue] || 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100';
 
 const PURPOSE_PRESETS = [
-  '小組聚會', '主日敬拜團', '各部開會', '個人安靜', '場地維護'
-];
-
-const CHURCH_WIDE_PURPOSE_PRESETS = [
-  '主日聚會', '特別聚會', '聯合聚會', '培靈會', '佈道會'
+  '小組聚會', '敬拜團練習', '開會', '個人安靜', '場地維護'
 ];
 
 const BOOKING_TYPE_LABELS: Record<BookingType, string> = {
   standard: '一般場地借用',
-  'sunday-service': '主日聚會',
-  'special-service': '特別聚會'
+  'sunday-service': '全教會聚會時段',
+  'special-service': '特別聚會（舊）'
 };
 
 const CHURCH_WIDE_TYPE_BADGES: Record<Exclude<BookingType, 'standard'>, string> = {
-  'sunday-service': '主日聚會',
-  'special-service': '特別聚會'
+  'sunday-service': '全教會聚會時段',
+  'special-service': '特別聚會（舊）'
 };
 
 const CHURCH_WIDE_TYPE_DEFAULT_PURPOSE: Record<BookingType, string> = {
   standard: '',
-  'sunday-service': '主日聚會',
+  'sunday-service': '主日崇拜',
   'special-service': '特別聚會'
 };
 
@@ -201,7 +197,7 @@ interface Booking {
   repeatForever?: boolean;
 }
 
-type RepeatType = 'none' | 'daily' | 'weekly' | 'biweekly';
+type RepeatType = 'none' | 'daily' | 'weekly' | 'biweekly' | 'odd-weeks' | 'even-weeks';
 
 interface BookingFormData {
   bookingType: BookingType;
@@ -234,10 +230,18 @@ const parseDateStr = (dateStr: string) => {
   return new Date(year, month - 1, day);
 };
 
+const formatDateWithWeekday = (dateStr: string) => {
+  const weekdays = ['日', '一', '二', '三', '四', '五', '六'];
+  const date = parseDateStr(dateStr);
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${month}/${day}(${weekdays[date.getDay()]})`;
+};
+
 const getNextRepeatDate = (dateStr: string, repeatType: RepeatType) => {
   const d = parseDateStr(dateStr);
   if (repeatType === 'daily') d.setDate(d.getDate() + 1);
-  else if (repeatType === 'weekly') d.setDate(d.getDate() + 7);
+  else if (repeatType === 'weekly' || repeatType === 'odd-weeks' || repeatType === 'even-weeks') d.setDate(d.getDate() + 7);
   else if (repeatType === 'biweekly') d.setDate(d.getDate() + 14);
   return formatDateStr(d);
 };
@@ -246,6 +250,33 @@ const addYearsToDateStr = (dateStr: string, years: number) => {
   const d = parseDateStr(dateStr);
   d.setFullYear(d.getFullYear() + years);
   return formatDateStr(d);
+};
+
+const addDaysToDateStr = (dateStr: string, days: number) => {
+  const d = parseDateStr(dateStr);
+  d.setDate(d.getDate() + days);
+  return formatDateStr(d);
+};
+
+const getWeekOfMonth = (dateStr: string) => Math.ceil(parseDateStr(dateStr).getDate() / 7);
+
+const matchesRepeatPattern = (dateStr: string, repeatType: RepeatType) => {
+  const weekOfMonth = getWeekOfMonth(dateStr);
+  if (repeatType === 'odd-weeks') return weekOfMonth === 1 || weekOfMonth === 3 || weekOfMonth === 5;
+  if (repeatType === 'even-weeks') return weekOfMonth === 2 || weekOfMonth === 4;
+  return true;
+};
+
+const getEndTimeOneHourLater = (startTime: string) => {
+  const [hours, minutes] = startTime.split(':').map(Number);
+  if (Number.isNaN(hours) || Number.isNaN(minutes)) return startTime;
+
+  const totalMinutes = (hours * 60) + minutes + 60;
+  const cappedMinutes = Math.min(totalMinutes, (23 * 60) + 59);
+  const nextHours = Math.floor(cappedMinutes / 60);
+  const nextMinutes = cappedMinutes % 60;
+
+  return `${String(nextHours).padStart(2, '0')}:${String(nextMinutes).padStart(2, '0')}`;
 };
 
 const isTimeOverlap = (startA: string, endA: string, startB: string, endB: string) => {
@@ -286,7 +317,11 @@ const compareBookingsForDisplay = (a: Pick<Booking, 'date' | 'startTime' | 'book
 };
 
 const getPurposePresetsByType = (bookingType: BookingType) => (
-  isChurchWideBookingType(bookingType) ? CHURCH_WIDE_PURPOSE_PRESETS : PURPOSE_PRESETS
+  bookingType === 'sunday-service'
+    ? ['主日崇拜', '特別聚會', '神蹟禱告會', '愛家禱告會']
+    : isChurchWideBookingType(bookingType)
+      ? ['特別聚會', '聯合聚會', '培靈會', '佈道會']
+      : PURPOSE_PRESETS
 );
 
 type ConflictCandidate = Pick<Booking, 'date' | 'startTime' | 'endTime' | 'venue' | 'bookingType'>;
@@ -541,7 +576,7 @@ function AppContent() {
         const churchWideConflict = conflicts.find(isChurchWideBooking);
         showToast(
           churchWideConflict
-            ? `貼上失敗：${dateStr} 有全教會聚會，該時段全空間暫停借用！`
+            ? `貼上失敗：${dateStr} 有全教會封鎖時段，該時段全空間暫停借用！`
             : `貼上失敗：${dateStr} 的時段已有衝突！`,
           'error'
         );
@@ -592,6 +627,7 @@ function AppContent() {
     repeatUntil: getTodayStr(),
     repeatForever: false
   });
+  const effectiveFormData = formData;
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     const target = e.target;
@@ -613,6 +649,9 @@ function AppContent() {
         if (!prev.purpose || prev.purpose === previousDefaultPurpose) {
           next.purpose = nextDefaultPurpose;
         }
+      }
+      if (name === 'startTime' && typeof value === 'string') {
+        next.endTime = getEndTimeOneHourLater(value);
       }
       if (name === 'date' && next.repeatUntil < String(value)) {
         next.repeatUntil = String(value);
@@ -660,12 +699,19 @@ function AppContent() {
 
       let inferredRepeat: RepeatType = venueOrBooking.repeat || 'none';
       if (inferredRepeat === 'none' && sameSeriesBookings.length >= 2) {
-        const first = parseDateStr(sameSeriesBookings[0].date);
-        const second = parseDateStr(sameSeriesBookings[1].date);
-        const diffDays = Math.round((second.getTime() - first.getTime()) / (1000 * 60 * 60 * 24));
-        if (diffDays === 1) inferredRepeat = 'daily';
-        else if (diffDays === 7) inferredRepeat = 'weekly';
-        else if (diffDays === 14) inferredRepeat = 'biweekly';
+        const allOddWeeks = sameSeriesBookings.every((booking) => matchesRepeatPattern(booking.date, 'odd-weeks'));
+        const allEvenWeeks = sameSeriesBookings.every((booking) => matchesRepeatPattern(booking.date, 'even-weeks'));
+
+        if (allOddWeeks) inferredRepeat = 'odd-weeks';
+        else if (allEvenWeeks) inferredRepeat = 'even-weeks';
+        else {
+          const first = parseDateStr(sameSeriesBookings[0].date);
+          const second = parseDateStr(sameSeriesBookings[1].date);
+          const diffDays = Math.round((second.getTime() - first.getTime()) / (1000 * 60 * 60 * 24));
+          if (diffDays === 1) inferredRepeat = 'daily';
+          else if (diffDays === 7) inferredRepeat = 'weekly';
+          else if (diffDays === 14) inferredRepeat = 'biweekly';
+        }
       }
 
       const seriesLastDate = sameSeriesBookings.reduce(
@@ -719,35 +765,45 @@ function AppContent() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!formData.borrower || !formData.purpose) return;
+    if (!effectiveFormData.borrower || !effectiveFormData.purpose) return;
     
     const originalBooking = editingId ? bookings.find(b => b.id === editingId) : null;
-    const isTimeChanged = !originalBooking || originalBooking.date !== formData.date || originalBooking.startTime !== formData.startTime;
+    const isTimeChanged = !originalBooking || originalBooking.date !== effectiveFormData.date || originalBooking.startTime !== effectiveFormData.startTime;
 
     // 時間驗證 (僅在新增或修改時間時檢查)
     if (isTimeChanged) {
       const todayStr = getTodayStr();
-      if (formData.date < todayStr) {
+      if (effectiveFormData.date < todayStr) {
         showToast('無法預約過去的日期！', 'error');
         return;
       }
-      if (formData.date === todayStr) {
+      if (effectiveFormData.date === todayStr) {
         const now = new Date();
         const currentTime = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
-        if (formData.startTime < currentTime) {
+        if (effectiveFormData.startTime < currentTime) {
           showToast('無法預約過去的時間！', 'error');
           return;
         }
       }
     }
 
-    if (formData.startTime >= formData.endTime) {
+    if (effectiveFormData.startTime >= effectiveFormData.endTime) {
       showToast('結束時間必須晚於開始時間！', 'error');
       return;
     }
 
-    if (formData.repeat !== 'none' && !formData.repeatForever && formData.repeatUntil < formData.date) {
+    if (effectiveFormData.repeat !== 'none' && !effectiveFormData.repeatForever && effectiveFormData.repeatUntil < effectiveFormData.date) {
       showToast('重複結束日期不能早於主預約日期！', 'error');
+      return;
+    }
+
+    if ((effectiveFormData.repeat === 'odd-weeks' || effectiveFormData.repeat === 'even-weeks') && !matchesRepeatPattern(effectiveFormData.date, effectiveFormData.repeat)) {
+      showToast(
+        effectiveFormData.repeat === 'odd-weeks'
+          ? '起始日期必須落在當月第 1、3、5 週。'
+          : '起始日期必須落在當月第 2、4 週。',
+        'error'
+      );
       return;
     }
     
@@ -763,7 +819,8 @@ function AppContent() {
     try {
       setIsSubmitting(true);
       const batch = writeBatch(db);
-      let baseDateStr = formData.date;
+      const normalizedFormData = formData;
+      let baseDateStr = normalizedFormData.date;
       const originalBooking = editingId ? bookings.find(b => b.id === editingId) : null;
       
       // 1. 先從 Firestore 重新取得最新資料，避免使用過舊的本地狀態
@@ -777,8 +834,8 @@ function AppContent() {
       
       const checkConflictOptimized = (date: string, start: string, end: string, excludeId: string | null, ignoredIds: Set<string> = new Set()) => (
         getConflictingBookings(liveBookings, {
-          bookingType: formData.bookingType,
-          venue: formData.venue,
+          bookingType: normalizedFormData.bookingType,
+          venue: normalizedFormData.venue,
           date,
           startTime: start,
           endTime: end
@@ -787,9 +844,9 @@ function AppContent() {
 
       // 檢查主預約是否有衝突
       const mainConflicts = checkConflictOptimized(
-        formData.date, 
-        formData.startTime, 
-        formData.endTime, 
+        normalizedFormData.date, 
+        normalizedFormData.startTime, 
+        normalizedFormData.endTime, 
         editingId, 
         deletedFutureIds
       );
@@ -797,8 +854,8 @@ function AppContent() {
         const churchWideConflict = mainConflicts.find(isChurchWideBooking);
         showToast(
           churchWideConflict
-            ? `預約失敗：${formData.date} 有全教會聚會，該時段全空間暫停借用！`
-            : `預約失敗：${formData.date} 的時段已有衝突！`,
+            ? `預約失敗：${normalizedFormData.date} 有全教會封鎖時段，該時段全空間暫停借用！`
+            : `預約失敗：${normalizedFormData.date} 的時段已有衝突！`,
           'error'
         );
         setIsSubmitting(false);
@@ -806,25 +863,31 @@ function AppContent() {
       }
 
       let currentGroupId = originalBooking?.groupId;
-      if (!currentGroupId && formData.repeat !== 'none') {
+      if (!currentGroupId && normalizedFormData.repeat !== 'none') {
         currentGroupId = Math.random().toString(36).substring(2, 15);
       }
 
       // 2. 準備重複預約資料並檢查衝突
       const newBookingsData: Omit<Booking, 'id'>[] = [];
-      if (formData.repeat !== 'none' && (!editingId || applyToFuture || !originalBooking?.groupId)) {
-        let currDateStr = getNextRepeatDate(baseDateStr, formData.repeat);
-        const endDateStr = formData.repeatForever 
+      if (normalizedFormData.repeat !== 'none' && (!editingId || applyToFuture || !originalBooking?.groupId)) {
+        let currDateStr = getNextRepeatDate(baseDateStr, normalizedFormData.repeat);
+        const endDateStr = normalizedFormData.repeatForever 
           ? addYearsToDateStr(baseDateStr, 1)
-          : formData.repeatUntil;
+          : normalizedFormData.repeatUntil;
           
         let safetyCounter = 0; 
 
         while (currDateStr <= endDateStr && safetyCounter < 370) {
+          if (!matchesRepeatPattern(currDateStr, normalizedFormData.repeat)) {
+            currDateStr = getNextRepeatDate(currDateStr, normalizedFormData.repeat);
+            safetyCounter++;
+            continue;
+          }
+
           const conflicts = checkConflictOptimized(
             currDateStr, 
-            formData.startTime, 
-            formData.endTime, 
+            normalizedFormData.startTime, 
+            normalizedFormData.endTime, 
             null, 
             deletedFutureIds
           );
@@ -832,7 +895,7 @@ function AppContent() {
             const churchWideConflict = conflicts.find(isChurchWideBooking);
             showToast(
               churchWideConflict
-                ? `預約失敗：重複日程中的 ${currDateStr} 有全教會聚會，該時段全空間暫停借用！`
+                ? `預約失敗：重複日程中的 ${currDateStr} 有全教會封鎖時段，該時段全空間暫停借用！`
                 : `預約失敗：重複日程中的 ${currDateStr} 已有衝突！`,
               'error'
             );
@@ -841,14 +904,14 @@ function AppContent() {
           }
 
           newBookingsData.push({ 
-            ...formData, 
+            ...normalizedFormData, 
             date: currDateStr,
             groupId: currentGroupId,
             uid: isAdminAuthenticated ? 'admin-password' : 'anonymous',
             authorName: isAdminAuthenticated ? '管理員' : '訪客',
             createdAt: serverTimestamp()
           });
-          currDateStr = getNextRepeatDate(currDateStr, formData.repeat);
+          currDateStr = getNextRepeatDate(currDateStr, normalizedFormData.repeat);
           safetyCounter++;
         }
       }
@@ -867,7 +930,7 @@ function AppContent() {
         }
         
         batch.update(doc(db, 'bookings', editingId), {
-          ...formData,
+          ...normalizedFormData,
           groupId: (applyToFuture || !originalBooking?.groupId) ? (currentGroupId || null) : (originalBooking?.groupId || null),
           uid: isAdminAuthenticated ? 'admin-password' : 'anonymous',
           authorName: isAdminAuthenticated ? '管理員' : '訪客'
@@ -875,7 +938,7 @@ function AppContent() {
       } else {
         const newDocRef = doc(collection(db, 'bookings'));
         batch.set(newDocRef, {
-          ...formData,
+          ...normalizedFormData,
           groupId: currentGroupId || null,
           uid: isAdminAuthenticated ? 'admin-password' : 'anonymous',
           authorName: isAdminAuthenticated ? '管理員' : '訪客',
@@ -1001,22 +1064,26 @@ function AppContent() {
   const conflicts = getConflictingBookings(
     bookings,
     {
-      bookingType: formData.bookingType,
-      venue: formData.venue,
-      date: formData.date,
-      startTime: formData.startTime,
-      endTime: formData.endTime
+      bookingType: effectiveFormData.bookingType,
+      venue: effectiveFormData.venue,
+      date: effectiveFormData.date,
+      startTime: effectiveFormData.startTime,
+      endTime: effectiveFormData.endTime
     },
     editingId
   );
   const isConflict = conflicts.length > 0;
   const hasChurchWideConflict = conflicts.some(isChurchWideBooking);
+  const conflictSummaries = conflicts.slice(0, 3).map((booking) => (
+    `${getBookingVenueLabel(booking)} · ${booking.startTime} - ${booking.endTime} · ${booking.borrower}`
+  ));
 
   const daysInMonth = new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 0).getDate();
   const firstDayOfMonth = new Date(currentDate.getFullYear(), currentDate.getMonth(), 1).getDay();
   const monthNames = ["一月", "二月", "三月", "四月", "五月", "六月", "七月", "八月", "九月", "十月", "十一月", "十二月"];
-  
+
   const mobileDetailsRef = useRef<HTMLDivElement>(null);
+  const calendarSwipeStartRef = useRef<{ x: number; y: number } | null>(null);
 
   const selectCalendarDate = (dateStr: string, options?: { scrollToDetails?: boolean }) => {
     setSelectedDateStr(dateStr);
@@ -1047,6 +1114,30 @@ function AppContent() {
     });
   };
 
+  const handleCalendarTouchStart = (event: React.TouchEvent<HTMLDivElement>) => {
+    const touch = event.changedTouches[0];
+    calendarSwipeStartRef.current = { x: touch.clientX, y: touch.clientY };
+  };
+
+  const handleCalendarTouchEnd = (event: React.TouchEvent<HTMLDivElement>) => {
+    const start = calendarSwipeStartRef.current;
+    calendarSwipeStartRef.current = null;
+    if (!start) return;
+
+    const touch = event.changedTouches[0];
+    const deltaX = touch.clientX - start.x;
+    const deltaY = touch.clientY - start.y;
+
+    if (Math.abs(deltaX) < 60 || Math.abs(deltaX) <= Math.abs(deltaY)) return;
+
+    if (deltaX > 0) prevMonth();
+    else nextMonth();
+  };
+
+  const handleCalendarTouchCancel = () => {
+    calendarSwipeStartRef.current = null;
+  };
+
   const prevMonth = () => {
     const newDate = new Date(currentDate.getFullYear(), currentDate.getMonth() - 1, 1);
     setCurrentDate(newDate);
@@ -1058,6 +1149,64 @@ function AppContent() {
     setCurrentDate(newDate);
     setSelectedDateStr(`${newDate.getFullYear()}-${String(newDate.getMonth() + 1).padStart(2, '0')}-01`);
   };
+
+  const goToToday = () => {
+    const today = new Date();
+    setCurrentDate(today);
+    selectCalendarDate(getTodayStr(), { scrollToDetails: false });
+  };
+
+  useEffect(() => {
+    if (activeTab !== 'calendar' || isModalOpen || seriesConfirmModal.isOpen) return;
+
+    const handleCalendarNavigation = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (
+        target &&
+        (
+          target.tagName === 'INPUT' ||
+          target.tagName === 'TEXTAREA' ||
+          target.tagName === 'SELECT' ||
+          target.isContentEditable
+        )
+      ) {
+        return;
+      }
+
+      let nextDateStr: string | null = null;
+
+      switch (event.key) {
+        case 'ArrowLeft':
+          nextDateStr = addDaysToDateStr(selectedDateStr, -1);
+          break;
+        case 'ArrowRight':
+          nextDateStr = addDaysToDateStr(selectedDateStr, 1);
+          break;
+        case 'ArrowUp':
+          nextDateStr = addDaysToDateStr(selectedDateStr, -7);
+          break;
+        case 'ArrowDown':
+          nextDateStr = addDaysToDateStr(selectedDateStr, 7);
+          break;
+        case 'Enter':
+          event.preventDefault();
+          openBookingModal(undefined, false, selectedDateStr);
+          return;
+        default:
+          return;
+      }
+
+      if (!nextDateStr) return;
+
+      event.preventDefault();
+      const nextDate = parseDateStr(nextDateStr);
+      setCurrentDate(new Date(nextDate.getFullYear(), nextDate.getMonth(), 1));
+      selectCalendarDate(nextDateStr, { scrollToDetails: false });
+    };
+
+    window.addEventListener('keydown', handleCalendarNavigation);
+    return () => window.removeEventListener('keydown', handleCalendarNavigation);
+  }, [activeTab, isModalOpen, seriesConfirmModal.isOpen, selectedDateStr]);
 
   // 在月視圖中，根據篩選器與時間排序回傳預約資料
   const getBookingsForDate = (day: number) => {
@@ -1125,6 +1274,18 @@ function AppContent() {
       <header className="bg-white sticky top-0 z-10 border-b border-slate-100 shadow-sm">
         <div className="max-w-6xl mx-auto px-3 sm:px-6 lg:px-8 h-14 flex items-center justify-between gap-2">
           <div className="flex items-center min-w-0 gap-2">
+            <div className="w-8 h-8 sm:w-10 sm:h-10 shrink-0 bg-white rounded-lg overflow-hidden flex items-center justify-center">
+              <img 
+                src="/logo.svg" 
+                alt="Church Logo"
+                className="w-full h-full object-contain"
+                onError={(e) => {
+                  (e.target as HTMLImageElement).style.display = 'none';
+                  (e.target as HTMLImageElement).parentElement!.classList.add('bg-blue-600');
+                  (e.target as HTMLImageElement).parentElement!.innerHTML = '<span class="text-white text-xs font-bold">活水</span>';
+                }}
+              />
+            </div>
             <h1 className="text-base sm:text-xl font-bold tracking-tight text-slate-900 truncate">嘉義活水貴格會場地借用</h1>
           </div>
           
@@ -1162,20 +1323,6 @@ function AppContent() {
                 <span className="hidden xs:inline">月曆</span>
               </button>
             </div>
-
-            {/* Logo 移至右上角 */}
-            <div className="w-8 h-8 sm:w-10 sm:h-10 shrink-0 bg-white rounded-lg overflow-hidden flex items-center justify-center ml-1 sm:ml-2">
-              <img 
-                src="/logo.svg" 
-                alt="Church Logo"
-                className="w-full h-full object-contain"
-                onError={(e) => {
-                  (e.target as HTMLImageElement).style.display = 'none';
-                  (e.target as HTMLImageElement).parentElement!.classList.add('bg-blue-600');
-                  (e.target as HTMLImageElement).parentElement!.innerHTML = '<span class="text-white text-xs font-bold">活水</span>';
-                }}
-              />
-            </div>
           </div>
         </div>
       </header>
@@ -1202,8 +1349,8 @@ function AppContent() {
                 <div className="flex items-start gap-3">
                   <AlertCircle className="text-rose-600 shrink-0 mt-0.5" size={18} />
                   <div className="min-w-0">
-                    <p className="font-bold text-rose-900">今日有全教會聚會時段</p>
-                    <p className="text-xs sm:text-sm text-rose-700 mt-1">遇到主日聚會或特別聚會時，所有空間同步停止借用。</p>
+                    <p className="font-bold text-rose-900">今日有全教會封鎖時段</p>
+                    <p className="text-xs sm:text-sm text-rose-700 mt-1">遇到全教會封鎖時段時，所有空間同步停止借用。</p>
                     <div className="mt-3 flex flex-wrap gap-2">
                       {todayChurchWideBookings.map((booking) => (
                         <div key={booking.id} className="rounded-xl border border-rose-200 bg-white/80 px-3 py-2 text-xs sm:text-sm text-rose-800">
@@ -1220,56 +1367,56 @@ function AppContent() {
               </div>
             )}
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+            <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2.5 sm:gap-4">
               {VENUES.map(venue => {
                 const { active, next } = getVenueNextSchedule(venue);
                 const isOccupied = !!active;
                 const isChurchWideActive = !!active && isChurchWideBooking(active);
 
                 return (
-                  <div key={venue} className="bg-white rounded-2xl p-4 sm:p-5 border border-slate-100 shadow-sm hover:shadow-md transition-shadow relative flex flex-col h-full group">
-                    <div className="flex justify-between items-start mb-4">
+                  <div key={venue} className="bg-white rounded-xl sm:rounded-2xl p-3 sm:p-5 border border-slate-100 shadow-sm hover:shadow-md transition-shadow relative flex flex-col h-full group">
+                    <div className="flex justify-between items-start gap-2 mb-3 sm:mb-4">
                       <button 
                         onClick={() => openBookingModal(venue)}
-                        className="flex items-center gap-2 text-left group/title cursor-pointer min-w-0"
+                        className="flex items-center gap-1.5 sm:gap-2 text-left group/title cursor-pointer min-w-0"
                         title={`點擊新增 ${venue} 的預約`}
                       >
-                        <MapPin size={16} className="text-slate-400 group-hover/title:text-blue-600 transition-colors shrink-0" />
-                        <h3 className="font-semibold text-base sm:text-lg text-slate-800 group-hover/title:text-blue-600 transition-colors truncate">{venue}</h3>
-                        <div className="bg-blue-50 text-blue-600 rounded-md p-0.5 opacity-0 group-hover/title:opacity-100 transition-opacity -ml-1 shrink-0">
+                        <MapPin size={14} className="text-slate-400 group-hover/title:text-blue-600 transition-colors shrink-0 sm:w-4 sm:h-4" />
+                        <h3 className="font-semibold text-sm sm:text-lg text-slate-800 group-hover/title:text-blue-600 transition-colors truncate">{venue}</h3>
+                        <div className="hidden sm:block bg-blue-50 text-blue-600 rounded-md p-0.5 opacity-0 group-hover/title:opacity-100 transition-opacity -ml-1 shrink-0">
                           <Plus size={14} />
                         </div>
                       </button>
                       
-                      <span className={`px-2 py-0.5 rounded-full text-[10px] sm:text-xs font-medium flex items-center gap-1 whitespace-nowrap shrink-0
+                      <span className={`px-1.5 sm:px-2 py-0.5 rounded-full text-[9px] sm:text-xs font-medium flex items-center gap-1 whitespace-nowrap shrink-0
                         ${isChurchWideActive ? 'bg-rose-50 text-rose-600 border border-rose-200/60' : isOccupied ? 'bg-amber-50 text-amber-600 border border-amber-200/50' : 'bg-emerald-50 text-emerald-600 border border-emerald-200/50'}`}>
                         <span className={`w-1 h-1 sm:w-1.5 sm:h-1.5 rounded-full ${isChurchWideActive ? 'bg-rose-500 animate-pulse' : isOccupied ? 'bg-amber-500 animate-pulse' : 'bg-emerald-500'}`}></span>
                         {isChurchWideActive ? '聚會時段' : isOccupied ? '使用中' : '空閒'}
                       </span>
                     </div>
 
-                    <div className="flex-1 flex flex-col gap-3">
+                    <div className="flex-1 flex flex-col gap-2.5 sm:gap-3">
                       {active ? (
-                        <div className={`border rounded-xl p-3 text-sm relative group/edit transition-colors ${getBookingCardClasses(active)}`}>
-                          <div className="flex items-center gap-2 font-medium mb-1.5">
-                            <Clock size={14} className="opacity-70" />
+                        <div className={`border rounded-xl p-2.5 sm:p-3 text-xs sm:text-sm relative group/edit transition-colors ${getBookingCardClasses(active)}`}>
+                          <div className="flex items-center gap-1.5 sm:gap-2 font-medium mb-1">
+                            <Clock size={13} className="opacity-70 shrink-0 sm:w-[14px] sm:h-[14px]" />
                             <span>{active.startTime} - {active.endTime}</span>
                           </div>
                           {isChurchWideBooking(active) && (
-                            <div className="mb-2 inline-flex rounded-full bg-white/80 px-2 py-1 text-[10px] font-bold text-rose-700">
-                              {CHURCH_WIDE_TYPE_BADGES[getBookingType(active) as Exclude<BookingType, 'standard'>]} · 全教會聚會時段
+                            <div className="mb-1.5 inline-flex rounded-full bg-white/80 px-1.5 sm:px-2 py-0.5 sm:py-1 text-[9px] sm:text-[10px] font-bold text-rose-700">
+                              {CHURCH_WIDE_TYPE_BADGES[getBookingType(active) as Exclude<BookingType, 'standard'>]} · 全教會封鎖時段
                             </div>
                           )}
-                          <div className="flex items-center gap-2 mb-1.5">
-                            <Users size={14} className="opacity-70" />
-                            <span className="font-medium">{active.borrower}</span>
+                          <div className="flex items-center gap-1.5 sm:gap-2 mb-1 min-w-0">
+                            <Users size={13} className="opacity-70 shrink-0 sm:w-[14px] sm:h-[14px]" />
+                            <span className="font-medium truncate">{active.borrower}</span>
                           </div>
-                          <div className="flex items-center gap-2">
-                            <Info size={14} className="opacity-70" />
+                          <div className="flex items-center gap-1.5 sm:gap-2 min-w-0">
+                            <Info size={13} className="opacity-70 shrink-0 sm:w-[14px] sm:h-[14px]" />
                             <span className="truncate opacity-90">{active.purpose}</span>
                           </div>
                           
-                          <div className="absolute top-2 right-2 flex gap-1 opacity-0 group-hover/edit:opacity-100 transition-all">
+                          <div className="absolute top-2 right-2 hidden sm:flex gap-1 opacity-0 group-hover/edit:opacity-100 transition-all">
                             <button 
                               onClick={() => handleCopy(active)}
                               className="p-1.5 bg-white rounded-lg shadow-sm text-slate-600 hover:text-blue-600"
@@ -1287,27 +1434,27 @@ function AppContent() {
                           </div>
                         </div>
                       ) : (
-                        <div className="p-3 bg-slate-50 border border-slate-100 rounded-xl text-center">
-                          <span className="text-slate-400 text-xs font-medium italic">目前無人使用</span>
+                        <div className="p-2.5 sm:p-3 bg-slate-50 border border-slate-100 rounded-xl text-center">
+                          <span className="text-slate-400 text-[11px] sm:text-xs font-medium italic">目前無人使用</span>
                         </div>
                       )}
 
                       {next ? (
                         <div className="space-y-2 mt-1">
-                          <div className="text-[11px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-2">
+                          <div className="text-[10px] sm:text-[11px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5 sm:gap-2">
                             下一個預約 <span className="h-px bg-slate-100 flex-1"></span>
                           </div>
-                          <div className="bg-white border border-slate-100 rounded-lg p-2.5 text-sm flex items-center justify-between relative group/edit hover:border-blue-200 transition-colors">
+                          <div className="bg-white border border-slate-100 rounded-lg p-2 sm:p-2.5 text-xs sm:text-sm flex items-center justify-between relative group/edit hover:border-blue-200 transition-colors">
                             <div className="min-w-0 flex-1">
-                              <div className="text-slate-700 font-medium flex items-center gap-1.5">
-                                <span className="text-[10px] bg-slate-100 px-1.5 py-0.5 rounded text-slate-500">{next.date === getTodayStr() ? '今日' : next.date.split('-').slice(1).join('/')}</span>
+                              <div className="text-slate-700 font-medium flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-1.5">
+                                <span className="text-[10px] bg-slate-100 px-1.5 py-0.5 rounded text-slate-500 w-fit">{next.date === getTodayStr() ? '今日' : formatDateWithWeekday(next.date)}</span>
                                 <span>{next.startTime} - {next.endTime}</span>
                               </div>
                               <div className="text-slate-500 text-xs mt-0.5 truncate">
-                                {isChurchWideBooking(next) ? `${CHURCH_WIDE_TYPE_BADGES[getBookingType(next) as Exclude<BookingType, 'standard'>]} · 全教會聚會時段` : getBookingVenueLabel(next)} · {next.borrower}
+                                {isChurchWideBooking(next) ? `${CHURCH_WIDE_TYPE_BADGES[getBookingType(next) as Exclude<BookingType, 'standard'>]} · 全教會封鎖時段` : getBookingVenueLabel(next)} · {next.borrower}
                               </div>
                             </div>
-                            <div className="flex gap-1 opacity-0 group-hover/edit:opacity-100 transition-all shrink-0 ml-2">
+                            <div className="hidden sm:flex gap-1 opacity-0 group-hover/edit:opacity-100 transition-all shrink-0 ml-2">
                               <button 
                                 onClick={() => handleCopy(next)}
                                 className="p-1.5 bg-slate-50 rounded-md text-slate-400 hover:text-blue-600"
@@ -1327,14 +1474,14 @@ function AppContent() {
                         </div>
                       ) : (
                         <div className="mt-1">
-                          <div className="text-[11px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-2 mb-2">
+                          <div className="text-[10px] sm:text-[11px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5 sm:gap-2 mb-2">
                             下一個預約 <span className="h-px bg-slate-100 flex-1"></span>
                           </div>
                           <button 
                             onClick={() => openBookingModal(venue)}
-                            className="w-full flex items-center justify-center py-3 border-2 border-dashed border-slate-100 rounded-xl hover:border-blue-400 hover:bg-blue-50/50 transition-colors group/empty"
+                            className="w-full flex items-center justify-center py-2.5 sm:py-3 border-2 border-dashed border-slate-100 rounded-xl hover:border-blue-400 hover:bg-blue-50/50 transition-colors group/empty"
                           >
-                            <span className="text-slate-400 group-hover/empty:text-blue-600 text-xs font-medium transition-colors flex items-center gap-1">
+                            <span className="text-slate-400 group-hover/empty:text-blue-600 text-[11px] sm:text-xs font-medium transition-colors flex items-center gap-1">
                               <Plus size={14} /> 暫無預約，點擊新增
                             </span>
                           </button>
@@ -1353,13 +1500,7 @@ function AppContent() {
           <motion.div 
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
-            drag="x"
-            dragConstraints={{ left: 0, right: 0 }}
-            onDragEnd={(_, info) => {
-              if (info.offset.x > 100) prevMonth();
-              else if (info.offset.x < -100) nextMonth();
-            }}
-            className="bg-white rounded-3xl shadow-sm border border-slate-100 overflow-hidden p-2 sm:p-4 touch-pan-y"
+            className="bg-white rounded-3xl shadow-sm border border-slate-100 overflow-hidden p-2 sm:p-4"
           >
             
             {/* 月曆標頭與篩選器 */}
@@ -1372,7 +1513,7 @@ function AppContent() {
                 <button onClick={prevMonth} className="p-2 hover:bg-slate-100 rounded-full transition-colors">
                   <ChevronLeft size={20} className="text-slate-600" />
                 </button>
-                <button onClick={() => setCurrentDate(new Date())} className="px-3 py-1.5 text-sm font-medium hover:bg-slate-100 rounded-lg transition-colors text-slate-600">
+                <button onClick={goToToday} className="px-3 py-1.5 text-sm font-medium hover:bg-slate-100 rounded-lg transition-colors text-slate-600">
                   回到今天
                 </button>
                 <button onClick={nextMonth} className="p-2 hover:bg-slate-100 rounded-full transition-colors">
@@ -1407,198 +1548,205 @@ function AppContent() {
                 );
               })}
               <div className="px-2 py-0.5 sm:px-2.5 sm:py-1 rounded-full text-[9px] sm:text-[11px] font-medium whitespace-nowrap border border-rose-200 bg-rose-50 text-rose-700 shrink-0">
-                全教會聚會時段會自動顯示
+                全教會封鎖時段會自動顯示
               </div>
             </div>
 
-            {/* 月曆網格 - 簡約點點顯示模式 */}
-            <div className="overflow-hidden border-b border-slate-100 sm:border-none">
-              <div className="grid grid-cols-7 gap-px bg-slate-100 rounded-xl overflow-hidden border border-slate-100">
-                {['日', '一', '二', '三', '四', '五', '六'].map(day => (
-                  <div key={day} className="bg-slate-50 py-1 sm:py-1.5 text-center text-[10px] sm:text-xs font-semibold text-slate-500 uppercase tracking-wider">
-                    {day}
-                  </div>
-                ))}
-                
-                {Array.from({ length: firstDayOfMonth }).map((_, i) => (
-                  <div key={`empty-${i}`} className="bg-white min-h-[50px] sm:min-h-[80px] p-1 opacity-30"></div>
-                ))}
-                
-                {Array.from({ length: daysInMonth }).map((_, i) => {
-                  const day = i + 1;
-                  const dateStr = `${currentDate.getFullYear()}-${String(currentDate.getMonth() + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-                  const dayBookings = getBookingsForDate(day);
-                  const dayChurchWideBookings = dayBookings.filter(isChurchWideBooking);
-                  const hasChurchWideBooking = dayChurchWideBookings.length > 0;
-                  const isToday = getTodayStr() === dateStr;
-                  const isSelected = selectedDateStr === dateStr;
+            <div
+              onTouchStart={handleCalendarTouchStart}
+              onTouchEnd={handleCalendarTouchEnd}
+              onTouchCancel={handleCalendarTouchCancel}
+              className="touch-pan-y select-none"
+            >
+              {/* 月曆網格 - 簡約點點顯示模式 */}
+              <div className="overflow-hidden border-b border-slate-100 sm:border-none">
+                <div className="grid grid-cols-7 gap-px bg-slate-100 rounded-xl overflow-hidden border border-slate-100">
+                  {['日', '一', '二', '三', '四', '五', '六'].map(day => (
+                    <div key={day} className="bg-slate-50 py-1 sm:py-1.5 text-center text-[10px] sm:text-xs font-semibold text-slate-500 uppercase tracking-wider">
+                      {day}
+                    </div>
+                  ))}
                   
-                  return (
-                    <div 
-                      key={day} 
-                      onClick={() => selectCalendarDate(dateStr)}
-                      onContextMenu={(event) => openCalendarContextMenu(event, dateStr)}
-                      className={`bg-white min-h-[40px] sm:min-h-[60px] p-1 sm:p-1.5 border-t border-slate-100 transition-all hover:bg-blue-50/20 cursor-pointer group/day relative flex flex-col items-center justify-start ${hasChurchWideBooking ? 'bg-rose-50/40' : ''} ${isToday ? 'bg-blue-50/30' : ''} ${isSelected ? 'ring-2 ring-inset ring-blue-500/50 bg-blue-50/10' : ''}`}
-                    >
-                      <span className={`inline-flex items-center justify-center w-5 h-5 sm:w-6 sm:h-6 rounded-full text-[10px] sm:text-xs font-medium mb-0.5 sm:mb-1 transition-colors ${isToday ? 'bg-blue-600 text-white shadow-sm' : isSelected ? 'bg-blue-100 text-blue-700' : 'text-slate-700 group-hover/day:text-blue-600'}`}>
-                        {day}
-                      </span>
-                      {hasChurchWideBooking && (
-                        <div className="mb-0.5 rounded-full bg-rose-100 px-1.5 py-0.5 text-[7px] sm:text-[9px] font-bold text-rose-700 leading-none">
-                          保留
+                  {Array.from({ length: firstDayOfMonth }).map((_, i) => (
+                    <div key={`empty-${i}`} className="bg-white min-h-[50px] sm:min-h-[80px] p-1 opacity-30"></div>
+                  ))}
+                  
+                  {Array.from({ length: daysInMonth }).map((_, i) => {
+                    const day = i + 1;
+                    const dateStr = `${currentDate.getFullYear()}-${String(currentDate.getMonth() + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+                    const dayBookings = getBookingsForDate(day);
+                    const dayChurchWideBookings = dayBookings.filter(isChurchWideBooking);
+                    const hasChurchWideBooking = dayChurchWideBookings.length > 0;
+                    const isToday = getTodayStr() === dateStr;
+                    const isSelected = selectedDateStr === dateStr;
+                    
+                    return (
+                      <div 
+                        key={day} 
+                        onClick={() => selectCalendarDate(dateStr)}
+                        onContextMenu={(event) => openCalendarContextMenu(event, dateStr)}
+                        className={`bg-white min-h-[40px] sm:min-h-[60px] p-1 sm:p-1.5 border-t border-slate-100 transition-all hover:bg-blue-50/20 cursor-pointer group/day relative flex flex-col items-center justify-start ${hasChurchWideBooking ? 'bg-rose-50/40' : ''} ${isToday ? 'bg-blue-50/30' : ''} ${isSelected ? 'ring-2 ring-inset ring-blue-500/50 bg-blue-50/10' : ''}`}
+                      >
+                        <span className={`inline-flex items-center justify-center w-5 h-5 sm:w-6 sm:h-6 rounded-full text-[10px] sm:text-xs font-medium mb-0.5 sm:mb-1 transition-colors ${isToday ? 'bg-blue-600 text-white shadow-sm' : isSelected ? 'bg-blue-100 text-blue-700' : 'text-slate-700 group-hover/day:text-blue-600'}`}>
+                          {day}
+                        </span>
+                        {hasChurchWideBooking && (
+                          <div className="mb-0.5 rounded-full bg-rose-100 px-1.5 py-0.5 text-[7px] sm:text-[9px] font-bold text-rose-700 leading-none">
+                            保留
+                          </div>
+                        )}
+                        
+                        {/* 預約點點指示器 */}
+                        <div className="flex flex-wrap justify-center gap-0.5 sm:gap-1 max-w-full px-0.5">
+                          {dayBookings.slice(0, 8).map((b, idx) => (
+                            <div 
+                              key={idx} 
+                              className={`w-1 h-1 sm:w-1.5 sm:h-1.5 rounded-full shadow-sm ${getBookingDotClass(b)}`}
+                              title={`${b.startTime} ${getBookingVenueLabel(b)}`}
+                            />
+                          ))}
+                          {dayBookings.length > 8 && (
+                            <div className="text-[7px] sm:text-[9px] text-slate-400 font-bold leading-none">
+                              +{dayBookings.length - 8}
+                            </div>
+                          )}
                         </div>
-                      )}
-                      
-                      {/* 預約點點指示器 */}
-                      <div className="flex flex-wrap justify-center gap-0.5 sm:gap-1 max-w-full px-0.5">
-                        {dayBookings.slice(0, 8).map((b, idx) => (
-                          <div 
-                            key={idx} 
-                            className={`w-1 h-1 sm:w-1.5 sm:h-1.5 rounded-full shadow-sm ${getBookingDotClass(b)}`}
-                            title={`${b.startTime} ${getBookingVenueLabel(b)}`}
-                          />
-                        ))}
-                        {dayBookings.length > 8 && (
-                          <div className="text-[7px] sm:text-[9px] text-slate-400 font-bold leading-none">
-                            +{dayBookings.length - 8}
+
+                        {/* 桌面版懸停提示 */}
+                        {dayBookings.length > 0 && (
+                          <div className="hidden sm:group-hover/day:block absolute z-30 left-1/2 -translate-x-1/2 bottom-full mb-2 w-48 p-2 bg-slate-800 text-white rounded-lg shadow-xl text-[10px] pointer-events-none">
+                            <p className="font-bold border-b border-slate-700 pb-1 mb-1">{dateStr}</p>
+                            {dayBookings.slice(0, 3).map((b, idx) => (
+                              <p key={idx} className="truncate opacity-90">• {b.startTime} {getBookingVenueLabel(b)}{isChurchWideBooking(b) ? ` · ${getBookingTypeLabel(getBookingType(b))}` : ''}</p>
+                            ))}
+                            {dayBookings.length > 3 && <p className="opacity-60 italic">還有 {dayBookings.length - 3} 筆...</p>}
                           </div>
                         )}
                       </div>
+                    );
+                  })}
+                </div>
+              </div>
 
-                      {/* 桌面版懸停提示 */}
-                      {dayBookings.length > 0 && (
-                        <div className="hidden sm:group-hover/day:block absolute z-30 left-1/2 -translate-x-1/2 bottom-full mb-2 w-48 p-2 bg-slate-800 text-white rounded-lg shadow-xl text-[10px] pointer-events-none">
-                          <p className="font-bold border-b border-slate-700 pb-1 mb-1">{dateStr}</p>
-                          {dayBookings.slice(0, 3).map((b, idx) => (
-                            <p key={idx} className="truncate opacity-90">• {b.startTime} {getBookingVenueLabel(b)}{isChurchWideBooking(b) ? ` · ${getBookingTypeLabel(getBookingType(b))}` : ''}</p>
-                          ))}
-                          {dayBookings.length > 3 && <p className="opacity-60 italic">還有 {dayBookings.length - 3} 筆...</p>}
-                        </div>
+              {/* 日期詳情列表 - 桌面與手機版共用 */}
+              <div ref={mobileDetailsRef} className="mt-6 border-t border-slate-100 pt-6">
+                <div className="flex items-center justify-between mb-4">
+                  <div className="flex items-center gap-2">
+                    <div className="w-8 h-8 bg-blue-50 rounded-lg flex items-center justify-center text-blue-600">
+                      <CalendarIcon size={16} />
+                    </div>
+                    <div>
+                      <h3 className="text-base sm:text-lg font-bold text-slate-800">
+                        {selectedDateStr} 預約詳情
+                      </h3>
+                      {clipboardBooking && (
+                        <p className="text-xs text-slate-500 mt-0.5">
+                          已複製 {getBookingVenueLabel(clipboardBooking)} {clipboardBooking.startTime} - {clipboardBooking.endTime}
+                        </p>
                       )}
                     </div>
-                  );
-                })}
-              </div>
-            </div>
-
-            {/* 日期詳情列表 - 桌面與手機版共用 */}
-            <div ref={mobileDetailsRef} className="mt-6 border-t border-slate-100 pt-6">
-              <div className="flex items-center justify-between mb-4">
-                <div className="flex items-center gap-2">
-                  <div className="w-8 h-8 bg-blue-50 rounded-lg flex items-center justify-center text-blue-600">
-                    <CalendarIcon size={16} />
                   </div>
-                  <div>
-                    <h3 className="text-base sm:text-lg font-bold text-slate-800">
-                      {selectedDateStr} 預約詳情
-                    </h3>
-                    {clipboardBooking && (
-                      <p className="text-xs text-slate-500 mt-0.5">
-                        已複製 {getBookingVenueLabel(clipboardBooking)} {clipboardBooking.startTime} - {clipboardBooking.endTime}
-                      </p>
-                    )}
-                  </div>
-                </div>
-                <div className="flex items-center gap-2">
-                  <button 
-                    onClick={() => void handlePaste(selectedDateStr)}
-                    disabled={!clipboardBooking}
-                    className={`flex items-center gap-1.5 px-3 py-1.5 sm:px-4 sm:py-2 rounded-xl text-xs sm:text-sm font-bold transition-all ${
-                      clipboardBooking
-                        ? 'text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 active:scale-95'
-                        : 'text-slate-400 bg-slate-100 border border-slate-200 cursor-not-allowed'
-                    }`}
-                    title={clipboardBooking ? `貼上到 ${selectedDateStr}` : '請先複製一筆預約'}
-                  >
-                    <ClipboardPaste size={14} /> 貼上
-                  </button>
-                  <button 
-                    onClick={() => openBookingModal(undefined, false, selectedDateStr)}
-                    className="flex items-center gap-1.5 text-xs sm:text-sm font-bold text-white bg-blue-600 px-3 py-1.5 sm:px-4 sm:py-2 rounded-xl hover:bg-blue-700 shadow-sm shadow-blue-600/20 active:scale-95 transition-all"
-                  >
-                    <Plus size={14} /> 新增預約
-                  </button>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {selectedDateChurchWideBookings.length > 0 && (
-                  <div className="col-span-full rounded-2xl border border-rose-200 bg-rose-50 p-4">
-                    <div className="flex items-start gap-3">
-                      <AlertCircle className="text-rose-600 shrink-0 mt-0.5" size={18} />
-                      <div>
-                        <p className="font-bold text-rose-900">此日期有全教會聚會時段</p>
-                        <p className="text-sm text-rose-700 mt-1">聚會時段內所有場地都不可借用，月曆會固定顯示這些事件。</p>
-                        <div className="mt-3 flex flex-wrap gap-2">
-                          {selectedDateChurchWideBookings.map((booking) => (
-                            <div key={booking.id} className="rounded-xl border border-rose-200 bg-white/80 px-3 py-2 text-xs sm:text-sm text-rose-800">
-                              <span className="font-bold">{CHURCH_WIDE_TYPE_BADGES[getBookingType(booking) as Exclude<BookingType, 'standard'>]}</span>
-                              <span className="mx-2 text-rose-300">•</span>
-                              <span>{booking.startTime} - {booking.endTime}</span>
-                              <span className="mx-2 text-rose-300">•</span>
-                              <span>{booking.borrower}</span>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {selectedDateBookings.map((b, idx) => (
-                    <div 
-                      key={`${b.id}-${idx}`} 
-                      onClick={() => openBookingModal(b, true)}
-                      className={`p-4 rounded-2xl border shadow-sm flex flex-col gap-3 group cursor-pointer hover:shadow-md active:scale-[0.98] transition-all relative overflow-hidden ${getBookingCardClasses(b)}`}
+                  <div className="flex items-center gap-2">
+                    <button 
+                      onClick={() => void handlePaste(selectedDateStr)}
+                      disabled={!clipboardBooking}
+                      className={`flex items-center gap-1.5 px-3 py-1.5 sm:px-4 sm:py-2 rounded-xl text-xs sm:text-sm font-bold transition-all ${
+                        clipboardBooking
+                          ? 'text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 active:scale-95'
+                          : 'text-slate-400 bg-slate-100 border border-slate-200 cursor-not-allowed'
+                      }`}
+                      title={clipboardBooking ? `貼上到 ${selectedDateStr}` : '請先複製一筆預約'}
                     >
-                      <div className="flex justify-between items-start relative z-10">
-                        <div className="flex items-center gap-2 font-bold text-sm text-slate-800">
-                          <Clock size={16} className="opacity-70" />
-                          <span>{b.startTime} - {b.endTime}</span>
-                        </div>
-                        <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                          <button onClick={(e) => {e.stopPropagation(); handleCopy(b);}} className="p-1.5 bg-white/60 hover:bg-white rounded-lg transition-colors"><Copy size={14}/></button>
-                          <button onClick={(e) => {e.stopPropagation(); openBookingModal(b, true);}} className="p-1.5 bg-white/60 hover:bg-white rounded-lg transition-colors"><Edit2 size={14}/></button>
-                        </div>
-                      </div>
-                      {isChurchWideBooking(b) && (
-                        <div className="relative z-10 inline-flex w-fit rounded-full bg-white/80 px-2.5 py-1 text-[11px] font-bold text-rose-700">
-                          {CHURCH_WIDE_TYPE_BADGES[getBookingType(b) as Exclude<BookingType, 'standard'>]} · 全教會聚會時段
-                        </div>
-                      )}
-                      <div className="flex items-center gap-2 text-sm font-bold text-slate-700 relative z-10">
-                        <MapPin size={16} className="opacity-70" />
-                        <span>{getBookingVenueLabel(b)}</span>
-                      </div>
-                      <div className="flex items-center gap-2 text-sm text-slate-600 relative z-10">
-                        <Users size={16} className="opacity-70" />
-                        <span>{b.borrower}</span>
-                      </div>
-                      <div className="text-xs text-slate-500 mt-1 pl-6 border-l-2 border-slate-300 italic relative z-10">
-                        {b.purpose}
-                      </div>
-                      
-                      {/* 背景裝飾 */}
-                      <div className={`absolute -right-4 -bottom-4 opacity-5 group-hover:opacity-10 transition-opacity`}>
-                        <CalendarIcon size={80} />
-                      </div>
-                    </div>
-                  ))}
-                
-                {selectedDateBookings.length === 0 && (
-                  <div className="col-span-full py-16 text-center border-2 border-dashed border-slate-100 rounded-3xl bg-slate-50/50">
-                    <div className="w-16 h-16 bg-white rounded-full flex items-center justify-center mx-auto mb-4 shadow-sm">
-                      <CalendarIcon size={24} className="text-slate-300" />
-                    </div>
-                    <p className="text-slate-400 font-medium">當日尚無預約</p>
+                      <ClipboardPaste size={14} /> 貼上
+                    </button>
                     <button 
                       onClick={() => openBookingModal(undefined, false, selectedDateStr)}
-                      className="mt-4 text-blue-600 text-sm font-bold hover:text-blue-700 transition-colors"
+                      className="flex items-center gap-1.5 text-xs sm:text-sm font-bold text-white bg-blue-600 px-3 py-1.5 sm:px-4 sm:py-2 rounded-xl hover:bg-blue-700 shadow-sm shadow-blue-600/20 active:scale-95 transition-all"
                     >
-                      立即為 {selectedDateStr} 新增預約
+                      <Plus size={14} /> 新增預約
                     </button>
                   </div>
-                )}
+                </div>
+
+                <div className="grid grid-cols-2 lg:grid-cols-3 gap-2.5 sm:gap-3">
+                  {selectedDateChurchWideBookings.length > 0 && (
+                    <div className="col-span-full rounded-2xl border border-rose-200 bg-rose-50 p-4">
+                      <div className="flex items-start gap-3">
+                        <AlertCircle className="text-rose-600 shrink-0 mt-0.5" size={18} />
+                        <div>
+                          <p className="font-bold text-rose-900">此日期有全教會封鎖時段</p>
+                          <p className="text-sm text-rose-700 mt-1">聚會時段內所有場地都不可借用，月曆會固定顯示這些事件。</p>
+                          <div className="mt-3 flex flex-wrap gap-2">
+                            {selectedDateChurchWideBookings.map((booking) => (
+                              <div key={booking.id} className="rounded-xl border border-rose-200 bg-white/80 px-3 py-2 text-xs sm:text-sm text-rose-800">
+                                <span className="font-bold">{CHURCH_WIDE_TYPE_BADGES[getBookingType(booking) as Exclude<BookingType, 'standard'>]}</span>
+                                <span className="mx-2 text-rose-300">•</span>
+                                <span>{booking.startTime} - {booking.endTime}</span>
+                                <span className="mx-2 text-rose-300">•</span>
+                                <span>{booking.borrower}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {selectedDateBookings.map((b, idx) => (
+                      <div 
+                        key={`${b.id}-${idx}`} 
+                        onClick={() => openBookingModal(b, true)}
+                        className={`p-3 sm:p-4 rounded-xl sm:rounded-2xl border shadow-sm flex flex-col gap-2 sm:gap-3 group cursor-pointer hover:shadow-md active:scale-[0.98] transition-all relative overflow-hidden ${getBookingCardClasses(b)}`}
+                      >
+                        <div className="flex justify-between items-start relative z-10">
+                          <div className="flex items-center gap-1.5 sm:gap-2 font-bold text-xs sm:text-sm text-slate-800 min-w-0">
+                            <Clock size={14} className="opacity-70 shrink-0 sm:w-4 sm:h-4" />
+                            <span>{b.startTime} - {b.endTime}</span>
+                          </div>
+                          <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                            <button onClick={(e) => {e.stopPropagation(); handleCopy(b);}} className="p-1.5 bg-white/60 hover:bg-white rounded-lg transition-colors"><Copy size={14}/></button>
+                            <button onClick={(e) => {e.stopPropagation(); openBookingModal(b, true);}} className="p-1.5 bg-white/60 hover:bg-white rounded-lg transition-colors"><Edit2 size={14}/></button>
+                          </div>
+                        </div>
+                        {isChurchWideBooking(b) && (
+                          <div className="relative z-10 inline-flex w-fit rounded-full bg-white/80 px-2 py-0.5 sm:px-2.5 sm:py-1 text-[10px] sm:text-[11px] font-bold text-rose-700">
+                            {CHURCH_WIDE_TYPE_BADGES[getBookingType(b) as Exclude<BookingType, 'standard'>]} · 全教會封鎖時段
+                          </div>
+                        )}
+                        <div className="flex items-center gap-1.5 sm:gap-2 text-sm font-bold text-slate-700 relative z-10 min-w-0">
+                          <MapPin size={15} className="opacity-70 shrink-0 sm:w-4 sm:h-4" />
+                          <span className="truncate">{getBookingVenueLabel(b)}</span>
+                        </div>
+                        <div className="flex items-center gap-1.5 sm:gap-2 text-sm text-slate-600 relative z-10 min-w-0">
+                          <Users size={15} className="opacity-70 shrink-0 sm:w-4 sm:h-4" />
+                          <span className="truncate">{b.borrower}</span>
+                        </div>
+                        <div className="text-[11px] sm:text-xs text-slate-500 mt-0.5 sm:mt-1 pl-3 sm:pl-6 border-l-2 border-slate-300 italic relative z-10 truncate">
+                          {b.purpose}
+                        </div>
+                        
+                        {/* 背景裝飾 */}
+                        <div className={`absolute -right-3 -bottom-3 opacity-5 group-hover:opacity-10 transition-opacity hidden sm:block`}>
+                          <CalendarIcon size={64} />
+                        </div>
+                      </div>
+                    ))}
+                  
+                  {selectedDateBookings.length === 0 && (
+                    <div className="col-span-full py-16 text-center border-2 border-dashed border-slate-100 rounded-3xl bg-slate-50/50">
+                      <div className="w-16 h-16 bg-white rounded-full flex items-center justify-center mx-auto mb-4 shadow-sm">
+                        <CalendarIcon size={24} className="text-slate-300" />
+                      </div>
+                      <p className="text-slate-400 font-medium">當日尚無預約</p>
+                      <button 
+                        onClick={() => openBookingModal(undefined, false, selectedDateStr)}
+                        className="mt-4 text-blue-600 text-sm font-bold hover:text-blue-700 transition-colors"
+                      >
+                        立即為 {selectedDateStr} 新增預約
+                      </button>
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
           </motion.div>
@@ -1686,7 +1834,17 @@ function AppContent() {
                       <AlertCircle className="text-rose-600 shrink-0 mt-0.5" size={18} />
                       <div className="text-xs sm:text-sm text-rose-800">
                         <p className="font-bold mb-1">時間衝突警告</p>
-                        <p>{hasChurchWideConflict ? '此時段已有全教會聚會，所有空間都不可借用。' : '此時段該場地已有其他預約，請調整時間或場地。'}</p>
+                        <p>{hasChurchWideConflict ? '此時段已有全教會封鎖時段，所有空間都不可借用。' : '此時段該場地已有其他預約，請調整時間或場地。'}</p>
+                        {conflictSummaries.length > 0 && (
+                          <div className="mt-2 space-y-1 text-[11px] sm:text-xs text-rose-700">
+                            {conflictSummaries.map((summary) => (
+                              <p key={summary}>• {summary}</p>
+                            ))}
+                            {conflicts.length > conflictSummaries.length && (
+                              <p>• 另外還有 {conflicts.length - conflictSummaries.length} 筆衝突</p>
+                            )}
+                          </div>
+                        )}
                       </div>
                     </div>
                   )}
@@ -1700,14 +1858,16 @@ function AppContent() {
                       className="w-full min-w-0 px-4 py-2 sm:py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600 transition-all outline-none text-sm"
                     >
                       <option value="standard">一般場地借用</option>
-                      <option value="sunday-service">主日聚會（全教會聚會時段）</option>
-                      <option value="special-service">特別聚會（全教會聚會時段）</option>
+                      <option value="sunday-service">全教會聚會時段</option>
+                      {formData.bookingType === 'special-service' && (
+                        <option value="special-service">特別聚會（舊資料）</option>
+                      )}
                     </select>
                   </div>
 
                   {isChurchWideBookingType(formData.bookingType) && (
                     <div className="p-4 rounded-2xl border border-amber-200 bg-amber-50 text-amber-900">
-                      <p className="font-bold text-sm">這是一筆全教會聚會時段</p>
+                      <p className="font-bold text-sm">這是一筆全教會封鎖時段</p>
                       <p className="text-xs sm:text-sm mt-1">建立後，該時段所有空間都會停止借用，月曆與今日狀態也會特別標示。</p>
                     </div>
                   )}
@@ -1742,7 +1902,7 @@ function AppContent() {
                   {!isSubmitting && isConflict && (
                     <div className="p-3 bg-red-50 border border-red-100 rounded-xl flex items-center gap-2 text-red-600 animate-pulse">
                       <AlertCircle size={16} />
-                      <span className="text-xs font-bold">{hasChurchWideConflict ? '注意：此時段已有全教會聚會，所有場地都會被鎖定！' : '注意：此時段場地已被預約，請確認是否衝突！'}</span>
+                      <span className="text-xs font-bold">{hasChurchWideConflict ? '注意：此時段已有全教會封鎖，所有場地都會被鎖定！' : '注意：此時段場地已被預約，請確認是否衝突！'}</span>
                     </div>
                   )}
 
@@ -1759,6 +1919,8 @@ function AppContent() {
                         <option value="daily">每天重複</option>
                         <option value="weekly">每週重複</option>
                         <option value="biweekly">每兩週重複</option>
+                        <option value="odd-weeks">單數週重複</option>
+                        <option value="even-weeks">雙數週重複</option>
                       </select>
                     </div>
                     {formData.repeat !== 'none' && (
