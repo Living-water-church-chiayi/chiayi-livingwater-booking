@@ -19,6 +19,7 @@ import {
   Edit2,
   Trash2,
   Copy,
+  ClipboardPaste,
   Filter,
   AlertCircle,
   LogOut,
@@ -213,6 +214,12 @@ interface BookingFormData {
   repeatForever: boolean;
 }
 
+interface CalendarContextMenuState {
+  dateStr: string;
+  x: number;
+  y: number;
+}
+
 const formatDateStr = (d: Date) => {
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, '0');
@@ -330,6 +337,7 @@ function AppContent() {
   const [selectedDateStr, setSelectedDateStr] = useState(getTodayStr());
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isClearing, setIsClearing] = useState(false);
+  const [calendarContextMenu, setCalendarContextMenu] = useState<CalendarContextMenuState | null>(null);
 
   // --- 防止 Modal 開啟時背景滾動 ---
   useEffect(() => {
@@ -345,6 +353,29 @@ function AppContent() {
       document.body.style.overscrollBehavior = 'auto';
     };
   }, [isModalOpen]);
+
+  useEffect(() => {
+    if (!calendarContextMenu) return;
+
+    const closeContextMenu = () => setCalendarContextMenu(null);
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        closeContextMenu();
+      }
+    };
+
+    window.addEventListener('click', closeContextMenu);
+    window.addEventListener('resize', closeContextMenu);
+    window.addEventListener('scroll', closeContextMenu, true);
+    window.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      window.removeEventListener('click', closeContextMenu);
+      window.removeEventListener('resize', closeContextMenu);
+      window.removeEventListener('scroll', closeContextMenu, true);
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [calendarContextMenu]);
 
   // --- Firebase Firestore Real-time Sync ---
   useEffect(() => {
@@ -470,7 +501,7 @@ function AppContent() {
   const handleCopy = (booking: Booking) => {
     setClipboardBooking(booking);
     setShowClipboardHint(true);
-    showToast(`已複製「${getBookingVenueLabel(booking)} - ${booking.purpose}」，請點擊日期貼上`, 'success');
+    showToast(`已複製「${getBookingVenueLabel(booking)} - ${booking.purpose}」，可右鍵日期貼上，或使用下方貼上按鈕`, 'success');
     
     // 1.5 秒後自動隱藏下方黑色提示
     setTimeout(() => setShowClipboardHint(false), 1500);
@@ -985,6 +1016,35 @@ function AppContent() {
   
   const mobileDetailsRef = useRef<HTMLDivElement>(null);
 
+  const selectCalendarDate = (dateStr: string, options?: { scrollToDetails?: boolean }) => {
+    setSelectedDateStr(dateStr);
+    setCalendarContextMenu(null);
+
+    if (options?.scrollToDetails === false) return;
+
+    if (window.innerWidth < 640) {
+      setTimeout(() => {
+        mobileDetailsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }, 100);
+    }
+  };
+
+  const openCalendarContextMenu = (event: React.MouseEvent<HTMLDivElement>, dateStr: string) => {
+    event.preventDefault();
+    selectCalendarDate(dateStr, { scrollToDetails: false });
+
+    const menuWidth = 220;
+    const menuHeight = 132;
+    const nextX = Math.min(event.clientX, window.innerWidth - menuWidth - 12);
+    const nextY = Math.min(event.clientY, window.innerHeight - menuHeight - 12);
+
+    setCalendarContextMenu({
+      dateStr,
+      x: Math.max(12, nextX),
+      y: Math.max(12, nextY)
+    });
+  };
+
   const prevMonth = () => {
     const newDate = new Date(currentDate.getFullYear(), currentDate.getMonth() - 1, 1);
     setCurrentDate(newDate);
@@ -1048,7 +1108,7 @@ function AppContent() {
             className="fixed bottom-24 left-1/2 z-40 bg-slate-800 text-white px-5 py-3 rounded-2xl shadow-xl flex items-center gap-3"
           >
             <Copy size={16} className="text-blue-400" />
-            <span className="text-sm">已複製：{getBookingVenueLabel(clipboardBooking)} ({clipboardBooking.startTime})</span>
+            <span className="text-sm">已複製：{getBookingVenueLabel(clipboardBooking)} ({clipboardBooking.startTime})，可右鍵日期貼上</span>
             <button 
               onClick={() => setShowClipboardHint(false)}
               className="ml-2 p-1 bg-slate-700 hover:bg-slate-600 rounded-lg transition-colors"
@@ -1374,17 +1434,8 @@ function AppContent() {
                   return (
                     <div 
                       key={day} 
-                      onClick={() => {
-                        setSelectedDateStr(dateStr);
-                        if (clipboardBooking) {
-                          void handlePaste(dateStr);
-                        }
-                        if (window.innerWidth < 640) {
-                          setTimeout(() => {
-                            mobileDetailsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-                          }, 100);
-                        }
-                      }}
+                      onClick={() => selectCalendarDate(dateStr)}
+                      onContextMenu={(event) => openCalendarContextMenu(event, dateStr)}
                       className={`bg-white min-h-[40px] sm:min-h-[60px] p-1 sm:p-1.5 border-t border-slate-100 transition-all hover:bg-blue-50/20 cursor-pointer group/day relative flex flex-col items-center justify-start ${hasChurchWideBooking ? 'bg-rose-50/40' : ''} ${isToday ? 'bg-blue-50/30' : ''} ${isSelected ? 'ring-2 ring-inset ring-blue-500/50 bg-blue-50/10' : ''}`}
                     >
                       <span className={`inline-flex items-center justify-center w-5 h-5 sm:w-6 sm:h-6 rounded-full text-[10px] sm:text-xs font-medium mb-0.5 sm:mb-1 transition-colors ${isToday ? 'bg-blue-600 text-white shadow-sm' : isSelected ? 'bg-blue-100 text-blue-700' : 'text-slate-700 group-hover/day:text-blue-600'}`}>
@@ -1439,14 +1490,33 @@ function AppContent() {
                     <h3 className="text-base sm:text-lg font-bold text-slate-800">
                       {selectedDateStr} 預約詳情
                     </h3>
+                    {clipboardBooking && (
+                      <p className="text-xs text-slate-500 mt-0.5">
+                        已複製 {getBookingVenueLabel(clipboardBooking)} {clipboardBooking.startTime} - {clipboardBooking.endTime}
+                      </p>
+                    )}
                   </div>
                 </div>
-                <button 
-                  onClick={() => openBookingModal(undefined, false, selectedDateStr)}
-                  className="flex items-center gap-1.5 text-xs sm:text-sm font-bold text-white bg-blue-600 px-3 py-1.5 sm:px-4 sm:py-2 rounded-xl hover:bg-blue-700 shadow-sm shadow-blue-600/20 active:scale-95 transition-all"
-                >
-                  <Plus size={14} /> 新增預約
-                </button>
+                <div className="flex items-center gap-2">
+                  <button 
+                    onClick={() => void handlePaste(selectedDateStr)}
+                    disabled={!clipboardBooking}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 sm:px-4 sm:py-2 rounded-xl text-xs sm:text-sm font-bold transition-all ${
+                      clipboardBooking
+                        ? 'text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 active:scale-95'
+                        : 'text-slate-400 bg-slate-100 border border-slate-200 cursor-not-allowed'
+                    }`}
+                    title={clipboardBooking ? `貼上到 ${selectedDateStr}` : '請先複製一筆預約'}
+                  >
+                    <ClipboardPaste size={14} /> 貼上
+                  </button>
+                  <button 
+                    onClick={() => openBookingModal(undefined, false, selectedDateStr)}
+                    className="flex items-center gap-1.5 text-xs sm:text-sm font-bold text-white bg-blue-600 px-3 py-1.5 sm:px-4 sm:py-2 rounded-xl hover:bg-blue-700 shadow-sm shadow-blue-600/20 active:scale-95 transition-all"
+                  >
+                    <Plus size={14} /> 新增預約
+                  </button>
+                </div>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -1533,6 +1603,49 @@ function AppContent() {
         )}
 
       </main>
+
+      <AnimatePresence>
+        {calendarContextMenu && (
+          <motion.div
+            initial={{ opacity: 0, scale: 0.96 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.96 }}
+            className="fixed z-[60] w-56 rounded-2xl border border-slate-200 bg-white p-2 shadow-2xl"
+            style={{ left: calendarContextMenu.x, top: calendarContextMenu.y }}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="px-2 py-1.5 text-[11px] font-bold tracking-wider text-slate-400 uppercase">
+              {calendarContextMenu.dateStr}
+            </div>
+            <button
+              onClick={() => {
+                if (!clipboardBooking) return;
+                setCalendarContextMenu(null);
+                void handlePaste(calendarContextMenu.dateStr);
+              }}
+              disabled={!clipboardBooking}
+              className={`flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm transition-colors ${
+                clipboardBooking
+                  ? 'text-slate-700 hover:bg-blue-50 hover:text-blue-700'
+                  : 'text-slate-300 cursor-not-allowed'
+              }`}
+            >
+              <ClipboardPaste size={16} />
+              {clipboardBooking ? '貼上到這一天' : '請先複製一筆預約'}
+            </button>
+            <button
+              onClick={() => {
+                setCalendarContextMenu(null);
+                openBookingModal(undefined, false, calendarContextMenu.dateStr);
+              }}
+              className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm text-slate-700 transition-colors hover:bg-slate-100"
+            >
+              <Plus size={16} />
+              新增這一天的預約
+            </button>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       <button 
         onClick={() => openBookingModal()}
