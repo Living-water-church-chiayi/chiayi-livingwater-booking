@@ -108,7 +108,7 @@ class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundarySta
 // --- 資料設定 ---
 const VENUES = [
   '2F主堂', '飛鷹堂', '馬可餐廳', '方舟小棧', '豐盛教室', 
-  '副堂', '3F幼幼班', '3F會議室', '3F大空間', '4F'
+  '副堂', '3F幼幼班', '3F會議室', '3F大空間', '4F', '地下室'
 ];
 
 const CHURCH_WIDE_VENUE = '全教會';
@@ -126,7 +126,8 @@ const VENUE_COLORS: Record<string, string> = {
   '3F幼幼班': 'bg-rose-50 border-rose-200 text-rose-700 hover:bg-rose-100 hover:border-rose-300',
   '3F會議室': 'bg-teal-50 border-teal-200 text-teal-700 hover:bg-teal-100 hover:border-teal-300',
   '3F大空間': 'bg-violet-50 border-violet-200 text-violet-700 hover:bg-violet-100 hover:border-violet-300',
-  '4F': 'bg-orange-50 border-orange-200 text-orange-700 hover:bg-orange-100 hover:border-orange-300'
+  '4F': 'bg-orange-50 border-orange-200 text-orange-700 hover:bg-orange-100 hover:border-orange-300',
+  '地下室': 'bg-slate-50 border-slate-300 text-slate-700 hover:bg-slate-100 hover:border-slate-400'
 };
 
 const VENUE_DOTS: Record<string, string> = {
@@ -139,7 +140,8 @@ const VENUE_DOTS: Record<string, string> = {
   '3F幼幼班': 'bg-rose-500',
   '3F會議室': 'bg-teal-500',
   '3F大空間': 'bg-violet-500',
-  '4F': 'bg-orange-500'
+  '4F': 'bg-orange-500',
+  '地下室': 'bg-slate-500'
 };
 
 // 取得場地顏色標籤，若無則返回預設灰色
