@@ -238,6 +238,15 @@ const formatDateWithWeekday = (dateStr: string) => {
   return `${month}/${day}(${weekdays[date.getDay()]})`;
 };
 
+const formatDateShort = (dateStr: string) => {
+  const date = parseDateStr(dateStr);
+  return `${date.getMonth() + 1}/${date.getDate()}`;
+};
+
+const MIN_BOOKING_TIME = '05:00';
+const MAX_BOOKING_TIME = '22:00';
+const LATEST_START_TIME = '21:00';
+
 const getNextRepeatDate = (dateStr: string, repeatType: RepeatType) => {
   const d = parseDateStr(dateStr);
   if (repeatType === 'daily') d.setDate(d.getDate() + 1);
@@ -267,12 +276,18 @@ const matchesRepeatPattern = (dateStr: string, repeatType: RepeatType) => {
   return true;
 };
 
+const clampTime = (time: string, minTime: string, maxTime: string) => {
+  if (time < minTime) return minTime;
+  if (time > maxTime) return maxTime;
+  return time;
+};
+
 const getEndTimeOneHourLater = (startTime: string) => {
   const [hours, minutes] = startTime.split(':').map(Number);
   if (Number.isNaN(hours) || Number.isNaN(minutes)) return startTime;
 
   const totalMinutes = (hours * 60) + minutes + 60;
-  const cappedMinutes = Math.min(totalMinutes, (23 * 60) + 59);
+  const cappedMinutes = Math.min(totalMinutes, 22 * 60);
   const nextHours = Math.floor(cappedMinutes / 60);
   const nextMinutes = cappedMinutes % 60;
 
@@ -609,10 +624,10 @@ function AppContent() {
     if (dateStr === todayStr) {
       const now = new Date();
       let nextHour = now.getHours() + 1;
-      if (nextHour >= 24) return '23:00';
-      return `${nextHour.toString().padStart(2, '0')}:00`;
+      if (nextHour >= 24) nextHour = 23;
+      return clampTime(`${nextHour.toString().padStart(2, '0')}:00`, MIN_BOOKING_TIME, LATEST_START_TIME);
     }
-    return '10:00';
+    return clampTime('10:00', MIN_BOOKING_TIME, LATEST_START_TIME);
   };
 
   const [formData, setFormData] = useState<BookingFormData>({
@@ -676,9 +691,7 @@ function AppContent() {
       const currentTime = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
       if (formData.startTime < currentTime) {
         const nextStart = getNextValidTime(todayStr);
-        let endHour = parseInt(nextStart.split(':')[0]) + 2;
-        if (endHour >= 24) endHour = 23;
-        const nextEnd = `${endHour.toString().padStart(2, '0')}:00`;
+        const nextEnd = getEndTimeOneHourLater(nextStart);
         setFormData(prev => ({ ...prev, startTime: nextStart, endTime: nextEnd }));
       }
     }
@@ -740,9 +753,7 @@ function AppContent() {
     } else {
       const defaultDate = specificDate || getTodayStr();
       const defaultStart = getNextValidTime(defaultDate);
-      let endHour = parseInt(defaultStart.split(':')[0]) + 2;
-      if (endHour >= 24) endHour = 23;
-      const defaultEnd = `${endHour.toString().padStart(2, '0')}:00`;
+      const defaultEnd = getEndTimeOneHourLater(defaultStart);
 
       const defaultVenue = selectedVenues.length === 1 ? selectedVenues[0] : VENUES[0];
 
@@ -785,6 +796,16 @@ function AppContent() {
           return;
         }
       }
+    }
+
+    if (
+      effectiveFormData.startTime < MIN_BOOKING_TIME ||
+      effectiveFormData.startTime > LATEST_START_TIME ||
+      effectiveFormData.endTime < MIN_BOOKING_TIME ||
+      effectiveFormData.endTime > MAX_BOOKING_TIME
+    ) {
+      showToast('借用時間需介於 05:00 到 22:00 之間，且開始時間最晚為 21:00。', 'error');
+      return;
     }
 
     if (effectiveFormData.startTime >= effectiveFormData.endTime) {
@@ -1227,6 +1248,24 @@ function AppContent() {
     .filter(b => b.date === selectedDateStr && (isChurchWideBooking(b) || selectedVenues.includes(b.venue)))
     .sort(compareBookingsForDisplay);
   const selectedDateChurchWideBookings = selectedDateBookings.filter(isChurchWideBooking);
+  const dashboardVenueSchedules = VENUES
+    .map((venue, index) => ({
+      venue,
+      index,
+      ...getVenueNextSchedule(venue)
+    }))
+    .sort((a, b) => {
+      if (a.next && b.next) {
+        const compareResult = compareBookingsForDisplay(a.next, b.next);
+        if (compareResult !== 0) return compareResult;
+      } else if (a.next) {
+        return -1;
+      } else if (b.next) {
+        return 1;
+      }
+
+      return a.index - b.index;
+    });
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 font-sans selection:bg-blue-100 pb-12 relative overflow-x-hidden">
@@ -1368,8 +1407,7 @@ function AppContent() {
             )}
 
             <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2.5 sm:gap-4">
-              {VENUES.map(venue => {
-                const { active, next } = getVenueNextSchedule(venue);
+              {dashboardVenueSchedules.map(({ venue, active, next }) => {
                 const isOccupied = !!active;
                 const isChurchWideActive = !!active && isChurchWideBooking(active);
 
@@ -1504,19 +1542,19 @@ function AppContent() {
           >
             
             {/* 月曆標頭與篩選器 */}
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-3">
-              <h2 className="text-lg sm:text-xl font-bold text-slate-900 flex items-center gap-2">
+            <div className="flex items-center justify-between gap-2 mb-3">
+              <h2 className="text-lg sm:text-xl font-bold text-slate-900 flex items-center gap-2 min-w-0">
                 {currentDate.getFullYear()} 年 {monthNames[currentDate.getMonth()]}
               </h2>
               
-              <div className="flex gap-2">
-                <button onClick={prevMonth} className="p-2 hover:bg-slate-100 rounded-full transition-colors">
+              <div className="flex items-center justify-end gap-1 sm:gap-2 shrink-0">
+                <button onClick={prevMonth} className="p-2 hover:bg-slate-100 rounded-full transition-colors shrink-0">
                   <ChevronLeft size={20} className="text-slate-600" />
                 </button>
-                <button onClick={goToToday} className="px-3 py-1.5 text-sm font-medium hover:bg-slate-100 rounded-lg transition-colors text-slate-600">
+                <button onClick={goToToday} className="px-2.5 sm:px-3 py-1.5 text-sm font-medium hover:bg-slate-100 rounded-lg transition-colors text-slate-600 whitespace-nowrap">
                   回到今天
                 </button>
-                <button onClick={nextMonth} className="p-2 hover:bg-slate-100 rounded-full transition-colors">
+                <button onClick={nextMonth} className="p-2 hover:bg-slate-100 rounded-full transition-colors shrink-0">
                   <ChevronRight size={20} className="text-slate-600" />
                 </button>
               </div>
@@ -1630,27 +1668,27 @@ function AppContent() {
 
               {/* 日期詳情列表 - 桌面與手機版共用 */}
               <div ref={mobileDetailsRef} className="mt-6 border-t border-slate-100 pt-6">
-                <div className="flex items-center justify-between mb-4">
-                  <div className="flex items-center gap-2">
-                    <div className="w-8 h-8 bg-blue-50 rounded-lg flex items-center justify-center text-blue-600">
+                <div className="flex items-start justify-between gap-3 mb-4">
+                  <div className="flex items-center gap-2 min-w-0 flex-1">
+                    <div className="w-8 h-8 bg-blue-50 rounded-lg flex items-center justify-center text-blue-600 shrink-0">
                       <CalendarIcon size={16} />
                     </div>
-                    <div>
-                      <h3 className="text-base sm:text-lg font-bold text-slate-800">
-                        {selectedDateStr} 預約詳情
+                    <div className="min-w-0">
+                      <h3 className="text-sm sm:text-lg font-bold text-slate-800 whitespace-nowrap truncate">
+                        {formatDateShort(selectedDateStr)} 預約詳情
                       </h3>
                       {clipboardBooking && (
-                        <p className="text-xs text-slate-500 mt-0.5">
+                        <p className="text-xs text-slate-500 mt-0.5 truncate">
                           已複製 {getBookingVenueLabel(clipboardBooking)} {clipboardBooking.startTime} - {clipboardBooking.endTime}
                         </p>
                       )}
                     </div>
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 shrink-0">
                     <button 
                       onClick={() => void handlePaste(selectedDateStr)}
                       disabled={!clipboardBooking}
-                      className={`flex items-center gap-1.5 px-3 py-1.5 sm:px-4 sm:py-2 rounded-xl text-xs sm:text-sm font-bold transition-all ${
+                      className={`flex items-center gap-1.5 px-2.5 sm:px-4 py-1.5 sm:py-2 rounded-xl text-xs sm:text-sm font-bold transition-all ${
                         clipboardBooking
                           ? 'text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 active:scale-95'
                           : 'text-slate-400 bg-slate-100 border border-slate-200 cursor-not-allowed'
@@ -1661,7 +1699,7 @@ function AppContent() {
                     </button>
                     <button 
                       onClick={() => openBookingModal(undefined, false, selectedDateStr)}
-                      className="flex items-center gap-1.5 text-xs sm:text-sm font-bold text-white bg-blue-600 px-3 py-1.5 sm:px-4 sm:py-2 rounded-xl hover:bg-blue-700 shadow-sm shadow-blue-600/20 active:scale-95 transition-all"
+                      className="flex items-center gap-1.5 text-xs sm:text-sm font-bold text-white bg-blue-600 px-2.5 sm:px-4 py-1.5 sm:py-2 rounded-xl hover:bg-blue-700 shadow-sm shadow-blue-600/20 active:scale-95 transition-all"
                     >
                       <Plus size={14} /> 新增預約
                     </button>
@@ -1701,7 +1739,7 @@ function AppContent() {
                         <div className="flex justify-between items-start relative z-10">
                           <div className="flex items-center gap-1.5 sm:gap-2 font-bold text-xs sm:text-sm text-slate-800 min-w-0">
                             <Clock size={14} className="opacity-70 shrink-0 sm:w-4 sm:h-4" />
-                            <span>{b.startTime} - {b.endTime}</span>
+                            <span className="whitespace-nowrap">{b.startTime} - {b.endTime}</span>
                           </div>
                           <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                             <button onClick={(e) => {e.stopPropagation(); handleCopy(b);}} className="p-1.5 bg-white/60 hover:bg-white rounded-lg transition-colors"><Copy size={14}/></button>
@@ -1873,7 +1911,7 @@ function AppContent() {
                   )}
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <div className="space-y-1.5 min-w-0">
+                    <div className="space-y-1.5 min-w-0 overflow-hidden">
                       <label className="text-xs sm:text-sm font-semibold text-slate-700">借用人 / 單位 <span className="text-red-500">*</span></label>
                       <input 
                         type="text" 
@@ -1885,7 +1923,7 @@ function AppContent() {
                         className="w-full min-w-0 px-4 py-2 sm:py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600 transition-all outline-none text-sm"
                       />
                     </div>
-                    <div className="space-y-1.5 min-w-0">
+                    <div className="space-y-1.5 min-w-0 overflow-hidden">
                       <label className="text-xs sm:text-sm font-semibold text-slate-700">日期 <span className="text-red-500">*</span></label>
                       <input 
                         type="date" 
@@ -1893,7 +1931,7 @@ function AppContent() {
                         required
                         value={formData.date}
                         onChange={handleInputChange}
-                        className="w-full min-w-0 min-h-[42px] sm:min-h-[44px] px-4 py-2 sm:py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600 transition-all outline-none text-sm"
+                        className="input-safe-mobile w-full max-w-full min-w-0 min-h-[42px] sm:min-h-[44px] px-4 py-2 sm:py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600 transition-all outline-none text-sm"
                       />
                     </div>
                   </div>
@@ -1975,27 +2013,31 @@ function AppContent() {
                       </div>
                     )}
 
-                    <div className="grid grid-cols-2 gap-3 sm:gap-4">
-                      <div className="space-y-1.5 min-w-0">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4 min-w-0">
+                      <div className="space-y-1.5 min-w-0 overflow-hidden">
                         <label className="text-xs sm:text-sm font-semibold text-slate-700">開始時間 <span className="text-red-500">*</span></label>
                         <input 
                           type="time" 
                           name="startTime"
                           required
                           value={formData.startTime}
+                          min={MIN_BOOKING_TIME}
+                          max={LATEST_START_TIME}
                           onChange={handleInputChange}
-                          className="w-full min-w-0 min-h-[42px] sm:min-h-[44px] px-3 sm:px-4 py-2 sm:py-2.5 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600 transition-all outline-none text-sm"
+                          className="input-safe-mobile w-full max-w-full min-w-0 min-h-[42px] sm:min-h-[44px] px-3 sm:px-4 py-2 sm:py-2.5 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600 transition-all outline-none text-sm"
                         />
                       </div>
-                      <div className="space-y-1.5 min-w-0">
+                      <div className="space-y-1.5 min-w-0 overflow-hidden">
                         <label className="text-xs sm:text-sm font-semibold text-slate-700">結束時間 <span className="text-red-500">*</span></label>
                         <input 
                           type="time" 
                           name="endTime"
                           required
                           value={formData.endTime}
+                          min={MIN_BOOKING_TIME}
+                          max={MAX_BOOKING_TIME}
                           onChange={handleInputChange}
-                          className="w-full min-w-0 min-h-[42px] sm:min-h-[44px] px-3 sm:px-4 py-2 sm:py-2.5 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600 transition-all outline-none text-sm"
+                          className="input-safe-mobile w-full max-w-full min-w-0 min-h-[42px] sm:min-h-[44px] px-3 sm:px-4 py-2 sm:py-2.5 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600 transition-all outline-none text-sm"
                         />
                       </div>
                     </div>
