@@ -25,7 +25,20 @@ body,
     inline-size: 100%;
     max-inline-size: 100%;
     min-inline-size: 0;
-    overflow: visible;
+    overflow: hidden;
+    background-clip: padding-box;
+    -webkit-appearance: none;
+    appearance: none;
+  }
+
+  .select-safe-mobile {
+    box-sizing: border-box;
+    display: block;
+    inline-size: 100%;
+    max-inline-size: 100%;
+    min-inline-size: 0;
+    -webkit-appearance: none;
+    appearance: none;
     background-clip: padding-box;
   }
 

@@ -14,6 +14,7 @@ import {
   Info, 
   CheckCircle2, 
   ChevronLeft, 
+  ChevronDown,
   ChevronRight,
   LayoutDashboard,
   Edit2,
@@ -1912,18 +1913,21 @@ function AppContent() {
 
                   <div className="space-y-1.5 min-w-0">
                     <label className="text-xs sm:text-sm font-semibold text-slate-700">事件類型 <span className="text-red-500">*</span></label>
-                    <select
-                      name="bookingType"
-                      value={formData.bookingType}
-                      onChange={handleInputChange}
-                      className="w-full min-w-0 px-4 py-2 sm:py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600 transition-all outline-none text-sm"
-                    >
-                      <option value="standard">一般場地借用</option>
-                      <option value="sunday-service">全教會聚會時段</option>
-                      {formData.bookingType === 'special-service' && (
-                        <option value="special-service">特別聚會（舊資料）</option>
-                      )}
-                    </select>
+                    <div className="relative w-full min-w-0 overflow-hidden rounded-xl border border-slate-200 bg-slate-50 transition-all focus-within:border-blue-600 focus-within:ring-2 focus-within:ring-blue-600/20">
+                      <select
+                        name="bookingType"
+                        value={formData.bookingType}
+                        onChange={handleInputChange}
+                        className="select-safe-mobile block w-full min-w-0 appearance-none border-0 bg-transparent px-4 py-2 pr-10 sm:py-2.5 text-sm outline-none"
+                      >
+                        <option value="standard">一般場地借用</option>
+                        <option value="sunday-service">全教會聚會時段</option>
+                        {formData.bookingType === 'special-service' && (
+                          <option value="special-service">特別聚會（舊資料）</option>
+                        )}
+                      </select>
+                      <ChevronDown size={16} className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                    </div>
                   </div>
 
                   {isChurchWideBookingType(formData.bookingType) && (
@@ -1948,14 +1952,16 @@ function AppContent() {
                     </div>
                     <div className="space-y-1.5 min-w-0">
                       <label className="text-xs sm:text-sm font-semibold text-slate-700">日期 <span className="text-red-500">*</span></label>
-                      <input 
-                        type="date" 
-                        name="date"
-                        required
-                        value={formData.date}
-                        onChange={handleInputChange}
-                        className="input-safe-mobile w-full max-w-full min-w-0 min-h-[42px] sm:min-h-[44px] px-4 py-2 sm:py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600 transition-all outline-none text-sm"
-                      />
+                      <div className="relative w-full min-w-0 overflow-hidden rounded-xl border border-slate-200 bg-slate-50 transition-all focus-within:border-blue-600 focus-within:ring-2 focus-within:ring-blue-600/20">
+                        <input 
+                          type="date" 
+                          name="date"
+                          required
+                          value={formData.date}
+                          onChange={handleInputChange}
+                          className="input-safe-mobile block w-full max-w-full min-w-0 min-h-[42px] sm:min-h-[44px] border-0 bg-transparent px-4 py-2 sm:py-2.5 text-sm outline-none"
+                        />
+                      </div>
                     </div>
                   </div>
 
@@ -1970,19 +1976,22 @@ function AppContent() {
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 p-4 bg-blue-50/50 border border-blue-100 rounded-2xl">
                     <div className="space-y-1.5 min-w-0">
                       <label className="text-xs sm:text-sm font-semibold text-slate-700">重複設定</label>
-                      <select 
-                        name="repeat"
-                        value={formData.repeat}
-                        onChange={handleInputChange}
-                        className="w-full min-w-0 px-4 py-2 sm:py-2.5 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600 transition-all outline-none text-sm"
-                      >
-                        <option value="none">不重複</option>
-                        <option value="daily">每天重複</option>
-                        <option value="weekly">每週重複</option>
-                        <option value="biweekly">每兩週重複</option>
-                        <option value="odd-weeks">單數週重複</option>
-                        <option value="even-weeks">雙數週重複</option>
-                      </select>
+                      <div className="relative w-full min-w-0 overflow-hidden rounded-xl border border-slate-200 bg-white transition-all focus-within:border-blue-600 focus-within:ring-2 focus-within:ring-blue-600/20">
+                        <select 
+                          name="repeat"
+                          value={formData.repeat}
+                          onChange={handleInputChange}
+                          className="select-safe-mobile block w-full min-w-0 appearance-none border-0 bg-transparent px-4 py-2 pr-10 sm:py-2.5 text-sm outline-none"
+                        >
+                          <option value="none">不重複</option>
+                          <option value="daily">每天重複</option>
+                          <option value="weekly">每週重複</option>
+                          <option value="biweekly">每兩週重複</option>
+                          <option value="odd-weeks">單數週重複</option>
+                          <option value="even-weeks">雙數週重複</option>
+                        </select>
+                        <ChevronDown size={16} className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                      </div>
                     </div>
                     {formData.repeat !== 'none' && (
                       <div className="space-y-1.5 min-w-0 animate-in fade-in slide-in-from-left-2">
@@ -2000,15 +2009,17 @@ function AppContent() {
                           </label>
                         </div>
                         {!formData.repeatForever && (
-                          <input 
-                            type="date" 
-                            name="repeatUntil"
-                            required={!formData.repeatForever}
-                            value={formData.repeatUntil}
-                            min={formData.date}
-                            onChange={handleInputChange}
-                            className="input-safe-mobile w-full min-w-0 min-h-[42px] sm:min-h-[44px] px-4 py-2 sm:py-2.5 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600 transition-all outline-none text-sm"
-                          />
+                          <div className="relative w-full min-w-0 overflow-hidden rounded-xl border border-slate-200 bg-white transition-all focus-within:border-blue-600 focus-within:ring-2 focus-within:ring-blue-600/20">
+                            <input 
+                              type="date" 
+                              name="repeatUntil"
+                              required={!formData.repeatForever}
+                              value={formData.repeatUntil}
+                              min={formData.date}
+                              onChange={handleInputChange}
+                              className="input-safe-mobile block w-full min-w-0 min-h-[42px] sm:min-h-[44px] border-0 bg-transparent px-4 py-2 sm:py-2.5 text-sm outline-none"
+                            />
+                          </div>
                         )}
                       </div>
                     )}
@@ -2025,43 +2036,50 @@ function AppContent() {
                     ) : (
                       <div className="space-y-1.5 min-w-0">
                         <label className="text-xs sm:text-sm font-semibold text-slate-700">選擇場地 <span className="text-red-500">*</span></label>
-                        <select 
-                          name="venue"
-                          value={formData.venue}
-                          onChange={handleInputChange}
-                          className="w-full min-w-0 px-4 py-2 sm:py-2.5 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600 transition-all outline-none appearance-none cursor-pointer text-sm"
-                        >
-                          {VENUES.map(v => <option key={v} value={v}>{v}</option>)}
-                        </select>
+                        <div className="relative w-full min-w-0 overflow-hidden rounded-xl border border-slate-200 bg-white transition-all focus-within:border-blue-600 focus-within:ring-2 focus-within:ring-blue-600/20">
+                          <select 
+                            name="venue"
+                            value={formData.venue}
+                            onChange={handleInputChange}
+                            className="select-safe-mobile block w-full min-w-0 appearance-none border-0 bg-transparent px-4 py-2 pr-10 sm:py-2.5 text-sm outline-none"
+                          >
+                            {VENUES.map(v => <option key={v} value={v}>{v}</option>)}
+                          </select>
+                          <ChevronDown size={16} className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                        </div>
                       </div>
                     )}
 
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4 min-w-0">
                       <div className="space-y-1.5 min-w-0">
                         <label className="text-xs sm:text-sm font-semibold text-slate-700">開始時間 <span className="text-red-500">*</span></label>
-                        <input 
-                          type="time" 
-                          name="startTime"
-                          required
-                          value={formData.startTime}
-                          min={MIN_BOOKING_TIME}
-                          max={LATEST_START_TIME}
-                          onChange={handleInputChange}
-                          className="input-safe-mobile w-full max-w-full min-w-0 min-h-[42px] sm:min-h-[44px] px-3 sm:px-4 py-2 sm:py-2.5 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600 transition-all outline-none text-sm"
-                        />
+                        <div className="relative w-full min-w-0 overflow-hidden rounded-xl border border-slate-200 bg-white transition-all focus-within:border-blue-600 focus-within:ring-2 focus-within:ring-blue-600/20">
+                          <input 
+                            type="time" 
+                            name="startTime"
+                            required
+                            value={formData.startTime}
+                            min={MIN_BOOKING_TIME}
+                            max={LATEST_START_TIME}
+                            onChange={handleInputChange}
+                            className="input-safe-mobile block w-full max-w-full min-w-0 min-h-[42px] sm:min-h-[44px] border-0 bg-transparent px-3 sm:px-4 py-2 sm:py-2.5 text-sm outline-none"
+                          />
+                        </div>
                       </div>
                       <div className="space-y-1.5 min-w-0">
                         <label className="text-xs sm:text-sm font-semibold text-slate-700">結束時間 <span className="text-red-500">*</span></label>
-                        <input 
-                          type="time" 
-                          name="endTime"
-                          required
-                          value={formData.endTime}
-                          min={MIN_BOOKING_TIME}
-                          max={MAX_BOOKING_TIME}
-                          onChange={handleInputChange}
-                          className="input-safe-mobile w-full max-w-full min-w-0 min-h-[42px] sm:min-h-[44px] px-3 sm:px-4 py-2 sm:py-2.5 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600 transition-all outline-none text-sm"
-                        />
+                        <div className="relative w-full min-w-0 overflow-hidden rounded-xl border border-slate-200 bg-white transition-all focus-within:border-blue-600 focus-within:ring-2 focus-within:ring-blue-600/20">
+                          <input 
+                            type="time" 
+                            name="endTime"
+                            required
+                            value={formData.endTime}
+                            min={MIN_BOOKING_TIME}
+                            max={MAX_BOOKING_TIME}
+                            onChange={handleInputChange}
+                            className="input-safe-mobile block w-full max-w-full min-w-0 min-h-[42px] sm:min-h-[44px] border-0 bg-transparent px-3 sm:px-4 py-2 sm:py-2.5 text-sm outline-none"
+                          />
+                        </div>
                       </div>
                     </div>
                   </div>
