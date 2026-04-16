@@ -247,6 +247,7 @@ const formatDateShort = (dateStr: string) => {
 const MIN_BOOKING_TIME = '05:00';
 const MAX_BOOKING_TIME = '22:00';
 const LATEST_START_TIME = '21:00';
+const MAX_REPEAT_MONTHS = 3;
 
 const getNextRepeatDate = (dateStr: string, repeatType: RepeatType) => {
   const d = parseDateStr(dateStr);
@@ -256,11 +257,17 @@ const getNextRepeatDate = (dateStr: string, repeatType: RepeatType) => {
   return formatDateStr(d);
 };
 
-const addYearsToDateStr = (dateStr: string, years: number) => {
-  const d = parseDateStr(dateStr);
-  d.setFullYear(d.getFullYear() + years);
-  return formatDateStr(d);
+const addMonthsToDateStr = (dateStr: string, months: number) => {
+  const source = parseDateStr(dateStr);
+  const target = new Date(source);
+  target.setDate(1);
+  target.setMonth(target.getMonth() + months);
+  const lastDayOfTargetMonth = new Date(target.getFullYear(), target.getMonth() + 1, 0).getDate();
+  target.setDate(Math.min(source.getDate(), lastDayOfTargetMonth));
+  return formatDateStr(target);
 };
+
+const getRepeatLimitDate = (dateStr: string) => addMonthsToDateStr(dateStr, MAX_REPEAT_MONTHS);
 
 const addDaysToDateStr = (dateStr: string, days: number) => {
   const d = parseDateStr(dateStr);
@@ -293,6 +300,36 @@ const getEndTimeOneHourLater = (startTime: string) => {
   const nextMinutes = cappedMinutes % 60;
 
   return `${String(nextHours).padStart(2, '0')}:${String(nextMinutes).padStart(2, '0')}`;
+};
+
+const addHoursToTimeStr = (time: string, hoursToAdd: number) => {
+  const [hours, minutes] = time.split(':').map(Number);
+  if (Number.isNaN(hours) || Number.isNaN(minutes)) return null;
+
+  const totalMinutes = (hours * 60) + minutes + (hoursToAdd * 60);
+  if (totalMinutes < 0 || totalMinutes >= 24 * 60) return null;
+
+  const nextHours = Math.floor(totalMinutes / 60);
+  const nextMinutes = totalMinutes % 60;
+  return `${String(nextHours).padStart(2, '0')}:${String(nextMinutes).padStart(2, '0')}`;
+};
+
+const normalizeTimeInput = (time: string, minTime: string, maxTime: string, referenceTime?: string) => {
+  if (time >= minTime && time <= maxTime && (!referenceTime || time > referenceTime)) {
+    return time;
+  }
+
+  const plusTwelveHours = addHoursToTimeStr(time, 12);
+  if (
+    plusTwelveHours &&
+    plusTwelveHours >= minTime &&
+    plusTwelveHours <= maxTime &&
+    (!referenceTime || plusTwelveHours > referenceTime)
+  ) {
+    return plusTwelveHours;
+  }
+
+  return time;
 };
 
 const isTimeOverlap = (startA: string, endA: string, startB: string, endB: string) => {
@@ -385,6 +422,12 @@ function AppContent() {
     action: 'edit' | 'delete' | null;
     booking: Booking | null;
   }>({ isOpen: false, action: null, booking: null });
+  const [deleteConfirmModal, setDeleteConfirmModal] = useState<{
+    isOpen: boolean;
+    booking: Booking | null;
+    applyToFuture: boolean;
+    deleterName: string;
+  }>({ isOpen: false, booking: null, applyToFuture: false, deleterName: '' });
   const [currentDate, setCurrentDate] = useState(new Date());
   const [editingId, setEditingId] = useState<string | null>(null);
   const [selectedDateStr, setSelectedDateStr] = useState(getTodayStr());
@@ -394,7 +437,7 @@ function AppContent() {
 
   // --- 防止 Modal 開啟時背景滾動 ---
   useEffect(() => {
-    if (isModalOpen) {
+    if (isModalOpen || seriesConfirmModal.isOpen || deleteConfirmModal.isOpen) {
       document.body.style.overflow = 'hidden';
       document.body.style.overscrollBehavior = 'none';
     } else {
@@ -405,7 +448,7 @@ function AppContent() {
       document.body.style.overflow = 'unset';
       document.body.style.overscrollBehavior = 'auto';
     };
-  }, [isModalOpen]);
+  }, [deleteConfirmModal.isOpen, isModalOpen, seriesConfirmModal.isOpen]);
 
   useEffect(() => {
     if (!calendarContextMenu) return;
@@ -644,6 +687,7 @@ function AppContent() {
     repeatForever: false
   });
   const effectiveFormData = formData;
+  const repeatLimitDate = getRepeatLimitDate(formData.date);
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     const target = e.target;
@@ -667,7 +711,12 @@ function AppContent() {
         }
       }
       if (name === 'startTime' && typeof value === 'string') {
-        next.endTime = getEndTimeOneHourLater(value);
+        const normalizedStartTime = normalizeTimeInput(value, MIN_BOOKING_TIME, LATEST_START_TIME);
+        next.startTime = normalizedStartTime;
+        next.endTime = getEndTimeOneHourLater(normalizedStartTime);
+      }
+      if (name === 'endTime' && typeof value === 'string') {
+        next.endTime = normalizeTimeInput(value, MIN_BOOKING_TIME, MAX_BOOKING_TIME, next.startTime);
       }
       if (name === 'date' && next.repeatUntil < String(value)) {
         next.repeatUntil = String(value);
@@ -675,6 +724,15 @@ function AppContent() {
       if (name === 'repeat' && value === 'none') {
         next.repeatForever = false;
         next.repeatUntil = next.date;
+      }
+      if (next.repeat !== 'none' && !next.repeatForever) {
+        const nextRepeatLimitDate = getRepeatLimitDate(next.date);
+        if (next.repeatUntil < next.date) {
+          next.repeatUntil = next.date;
+        }
+        if (next.repeatUntil > nextRepeatLimitDate) {
+          next.repeatUntil = nextRepeatLimitDate;
+        }
       }
       return next;
     });
@@ -732,11 +790,15 @@ function AppContent() {
         (latest, b) => (b.date > latest ? b.date : latest),
         venueOrBooking.date
       );
-      const inferredRepeatUntil = inferredRepeat === 'none'
+      const repeatLimitDate = getRepeatLimitDate(venueOrBooking.date);
+      const inferredRepeatUntilBase = inferredRepeat === 'none'
         ? venueOrBooking.date
         : (venueOrBooking.repeatUntil && venueOrBooking.repeatUntil >= venueOrBooking.date
           ? (venueOrBooking.repeatUntil > seriesLastDate ? venueOrBooking.repeatUntil : seriesLastDate)
           : seriesLastDate);
+      const inferredRepeatUntil = inferredRepeat === 'none'
+        ? inferredRepeatUntilBase
+        : (inferredRepeatUntilBase > repeatLimitDate ? repeatLimitDate : inferredRepeatUntilBase);
 
       setFormData({
         bookingType: getBookingType(venueOrBooking),
@@ -842,6 +904,11 @@ function AppContent() {
       return;
     }
 
+    if (effectiveFormData.repeat !== 'none' && !effectiveFormData.repeatForever && effectiveFormData.repeatUntil > getRepeatLimitDate(effectiveFormData.date)) {
+      showToast(`重複預約最長只能建立三個月內的日期（至 ${getRepeatLimitDate(effectiveFormData.date)}）。`, 'error');
+      return;
+    }
+
     if ((effectiveFormData.repeat === 'odd-weeks' || effectiveFormData.repeat === 'even-weeks') && !matchesRepeatPattern(effectiveFormData.date, effectiveFormData.repeat)) {
       showToast(
         effectiveFormData.repeat === 'odd-weeks'
@@ -917,12 +984,12 @@ function AppContent() {
       if (normalizedFormData.repeat !== 'none' && (!editingId || applyToFuture || !originalBooking?.groupId)) {
         let currDateStr = getNextRepeatDate(baseDateStr, normalizedFormData.repeat);
         const endDateStr = normalizedFormData.repeatForever 
-          ? addYearsToDateStr(baseDateStr, 1)
+          ? getRepeatLimitDate(baseDateStr)
           : normalizedFormData.repeatUntil;
           
         let safetyCounter = 0; 
 
-        while (currDateStr <= endDateStr && safetyCounter < 370) {
+        while (currDateStr <= endDateStr && safetyCounter < 100) {
           if (!matchesRepeatPattern(currDateStr, normalizedFormData.repeat)) {
             currDateStr = getNextRepeatDate(currDateStr, normalizedFormData.repeat);
             safetyCounter++;
@@ -1032,13 +1099,36 @@ function AppContent() {
       setSeriesConfirmModal({ isOpen: true, action: 'delete', booking: originalBooking });
       return;
     }
-    await executeDelete(false, originalBooking);
+    openDeleteConfirmModal(originalBooking, false);
   };
 
-  const executeDelete = async (applyToFuture: boolean, targetBooking: Booking | null = null) => {
+  const openDeleteConfirmModal = (booking: Booking, applyToFuture: boolean) => {
+    setSeriesConfirmModal({ isOpen: false, action: null, booking: null });
+    setDeleteConfirmModal({
+      isOpen: true,
+      booking,
+      applyToFuture,
+      deleterName: ''
+    });
+  };
+
+  const handleDeleteConfirm = async () => {
+    const deleterName = deleteConfirmModal.deleterName.trim();
+    if (!deleterName) {
+      showToast('請先輸入刪除者的姓名！', 'error');
+      return;
+    }
+    await executeDelete(deleteConfirmModal.applyToFuture, deleteConfirmModal.booking, deleterName);
+  };
+
+  const executeDelete = async (applyToFuture: boolean, targetBooking: Booking | null = null, deleterName = '') => {
     const originalBooking = targetBooking || (editingId ? bookings.find(b => b.id === editingId) || null : null);
     if (!originalBooking) {
       showToast('找不到要刪除的預約，請重新開啟後再試。', 'error');
+      return;
+    }
+    if (!deleterName.trim()) {
+      showToast('請先輸入刪除者的姓名！', 'error');
       return;
     }
 
@@ -1062,8 +1152,9 @@ function AppContent() {
       }
       setIsModalOpen(false);
       setEditingId(null);
+      setDeleteConfirmModal({ isOpen: false, booking: null, applyToFuture: false, deleterName: '' });
       setSeriesConfirmModal({ isOpen: false, action: null, booking: null });
-      showToast('刪除預約成功！', 'success');
+      showToast(`刪除預約成功！刪除者：${deleterName.trim()}`, 'success');
     } catch (error) {
       showToast('刪除失敗，請稍後再試！', 'error');
       try {
@@ -1301,9 +1392,9 @@ function AppContent() {
             initial={{ opacity: 0, y: -20, x: "-50%" }}
             animate={{ opacity: 1, y: 0, x: "-50%" }}
             exit={{ opacity: 0, y: -20, x: "-50%" }}
-            className="fixed top-20 left-1/2 z-50"
+            className="fixed top-4 left-1/2 z-[120] w-[calc(100%-2rem)] max-w-xl pointer-events-none"
           >
-            <div className={`px-4 py-2 rounded-full shadow-lg flex items-center gap-2 text-sm font-medium text-white
+            <div className={`px-4 py-2 rounded-2xl shadow-lg flex items-center gap-2 text-sm font-medium text-white
               ${toast.type === 'success' ? 'bg-emerald-600' : 'bg-rose-600'}`}>
               <CheckCircle2 size={16} />
               {toast.message}
@@ -1973,7 +2064,7 @@ function AppContent() {
                     </div>
                   )}
 
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 p-4 bg-blue-50/50 border border-blue-100 rounded-2xl">
+                  <div className="grid grid-cols-1 gap-4 p-4 bg-blue-50/50 border border-blue-100 rounded-2xl md:grid-cols-2">
                     <div className="space-y-1.5 min-w-0">
                       <label className="text-xs sm:text-sm font-semibold text-slate-700">重複設定</label>
                       <div className="relative w-full min-w-0 overflow-hidden rounded-xl border border-slate-200 bg-white transition-all focus-within:border-blue-600 focus-within:ring-2 focus-within:ring-blue-600/20">
@@ -1995,9 +2086,9 @@ function AppContent() {
                     </div>
                     {formData.repeat !== 'none' && (
                       <div className="space-y-1.5 min-w-0 animate-in fade-in slide-in-from-left-2">
-                        <div className="flex items-center justify-between">
+                        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                           <label className="text-xs sm:text-sm font-semibold text-slate-700">結束重複日期</label>
-                          <label className="flex items-center gap-1.5 text-xs text-slate-600 cursor-pointer">
+                          <label className="flex items-center gap-1.5 text-xs leading-tight text-slate-600 cursor-pointer sm:justify-end">
                             <input 
                               type="checkbox" 
                               name="repeatForever"
@@ -2005,9 +2096,12 @@ function AppContent() {
                               onChange={handleInputChange}
                               className="rounded border-slate-300 text-blue-600 focus:ring-blue-600"
                             />
-                            不結束 (建立一年份)
+                            不結束（3個月）
                           </label>
                         </div>
+                        <p className="text-[11px] text-slate-500">
+                          最長到 {repeatLimitDate}
+                        </p>
                         {!formData.repeatForever && (
                           <div className="relative w-full min-w-0 overflow-hidden rounded-xl border border-slate-200 bg-white transition-all focus-within:border-blue-600 focus-within:ring-2 focus-within:ring-blue-600/20">
                             <input 
@@ -2016,6 +2110,7 @@ function AppContent() {
                               required={!formData.repeatForever}
                               value={formData.repeatUntil}
                               min={formData.date}
+                              max={repeatLimitDate}
                               onChange={handleInputChange}
                               className="input-safe-mobile block w-full min-w-0 min-h-[42px] sm:min-h-[44px] border-0 bg-transparent px-4 py-2 sm:py-2.5 text-sm outline-none"
                             />
@@ -2056,6 +2151,7 @@ function AppContent() {
                         <div className="relative w-full min-w-0 overflow-hidden rounded-xl border border-slate-200 bg-white transition-all focus-within:border-blue-600 focus-within:ring-2 focus-within:ring-blue-600/20">
                           <input 
                             type="time" 
+                            lang="en-GB"
                             name="startTime"
                             required
                             value={formData.startTime}
@@ -2071,6 +2167,7 @@ function AppContent() {
                         <div className="relative w-full min-w-0 overflow-hidden rounded-xl border border-slate-200 bg-white transition-all focus-within:border-blue-600 focus-within:ring-2 focus-within:ring-blue-600/20">
                           <input 
                             type="time" 
+                            lang="en-GB"
                             name="endTime"
                             required
                             value={formData.endTime}
@@ -2179,7 +2276,9 @@ function AppContent() {
                       if (seriesConfirmModal.action === 'edit') {
                         executeSubmit(false);
                       } else {
-                        executeDelete(false, seriesConfirmModal.booking);
+                        if (seriesConfirmModal.booking) {
+                          openDeleteConfirmModal(seriesConfirmModal.booking, false);
+                        }
                       }
                     }}
                     disabled={isSubmitting}
@@ -2193,7 +2292,9 @@ function AppContent() {
                       if (seriesConfirmModal.action === 'edit') {
                         executeSubmit(true);
                       } else {
-                        executeDelete(true, seriesConfirmModal.booking);
+                        if (seriesConfirmModal.booking) {
+                          openDeleteConfirmModal(seriesConfirmModal.booking, true);
+                        }
                       }
                     }}
                     disabled={isSubmitting}
@@ -2212,6 +2313,54 @@ function AppContent() {
                   className="px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-200/50 rounded-xl transition-colors"
                 >
                   取消
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {deleteConfirmModal.isOpen && (
+          <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-white rounded-3xl shadow-2xl w-full max-w-sm overflow-hidden border border-slate-100"
+            >
+              <div className="p-6">
+                <h3 className="text-lg font-bold text-slate-800 mb-2">確認刪除預約</h3>
+                <p className="text-sm text-slate-600 mb-4">
+                  為避免誤刪，請先輸入刪除者的姓名，再刪除{deleteConfirmModal.applyToFuture ? '此預約及後續所有預約' : '這筆預約'}。
+                </p>
+
+                <div className="space-y-1.5">
+                  <label className="text-xs sm:text-sm font-semibold text-slate-700">刪除者的姓名 <span className="text-red-500">*</span></label>
+                  <input
+                    type="text"
+                    value={deleteConfirmModal.deleterName}
+                    onChange={(event) => setDeleteConfirmModal(prev => ({ ...prev, deleterName: event.target.value }))}
+                    placeholder="請輸入姓名"
+                    className="w-full min-w-0 px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-red-600/20 focus:border-red-600 transition-all outline-none text-sm"
+                  />
+                </div>
+              </div>
+
+              <div className="px-6 py-4 border-t border-slate-100 bg-slate-50 flex justify-end gap-3">
+                <button
+                  onClick={() => setDeleteConfirmModal({ isOpen: false, booking: null, applyToFuture: false, deleterName: '' })}
+                  disabled={isSubmitting}
+                  className="px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-200/50 rounded-xl transition-colors"
+                >
+                  取消
+                </button>
+                <button
+                  onClick={() => void handleDeleteConfirm()}
+                  disabled={isSubmitting || !deleteConfirmModal.deleterName.trim()}
+                  className="px-4 py-2 text-sm font-semibold text-white bg-red-600 hover:bg-red-700 disabled:bg-red-300 rounded-xl transition-colors"
+                >
+                  {isSubmitting ? '刪除中...' : '確認刪除'}
                 </button>
               </div>
             </motion.div>

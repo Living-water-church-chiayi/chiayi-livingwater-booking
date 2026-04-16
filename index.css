@@ -1,5 +1,11 @@
 @import "tailwindcss";
 
+html,
+body,
+#root {
+  touch-action: pan-x pan-y;
+}
+
 @layer utilities {
   .custom-scrollbar::-webkit-scrollbar {
     height: 6px;
@@ -11,5 +17,42 @@
   .custom-scrollbar::-webkit-scrollbar-thumb {
     background-color: #cbd5e1;
     border-radius: 20px;
+  }
+
+  .input-safe-mobile {
+    box-sizing: border-box;
+    display: block;
+    inline-size: 100%;
+    max-inline-size: 100%;
+    min-inline-size: 0;
+    overflow: hidden;
+    background-clip: padding-box;
+    -webkit-appearance: none;
+    appearance: none;
+  }
+
+  .select-safe-mobile {
+    box-sizing: border-box;
+    display: block;
+    inline-size: 100%;
+    max-inline-size: 100%;
+    min-inline-size: 0;
+    -webkit-appearance: none;
+    appearance: none;
+    background-clip: padding-box;
+  }
+
+  .input-safe-mobile::-webkit-date-and-time-value {
+    min-block-size: 1.2em;
+    text-align: left;
+  }
+
+  .input-safe-mobile::-webkit-datetime-edit {
+    min-inline-size: 0;
+    padding: 0;
+  }
+
+  .input-safe-mobile::-webkit-calendar-picker-indicator {
+    margin: 0;
   }
 }
