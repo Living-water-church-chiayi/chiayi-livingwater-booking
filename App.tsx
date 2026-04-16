@@ -302,6 +302,36 @@ const getEndTimeOneHourLater = (startTime: string) => {
   return `${String(nextHours).padStart(2, '0')}:${String(nextMinutes).padStart(2, '0')}`;
 };
 
+const addHoursToTimeStr = (time: string, hoursToAdd: number) => {
+  const [hours, minutes] = time.split(':').map(Number);
+  if (Number.isNaN(hours) || Number.isNaN(minutes)) return null;
+
+  const totalMinutes = (hours * 60) + minutes + (hoursToAdd * 60);
+  if (totalMinutes < 0 || totalMinutes >= 24 * 60) return null;
+
+  const nextHours = Math.floor(totalMinutes / 60);
+  const nextMinutes = totalMinutes % 60;
+  return `${String(nextHours).padStart(2, '0')}:${String(nextMinutes).padStart(2, '0')}`;
+};
+
+const normalizeTimeInput = (time: string, minTime: string, maxTime: string, referenceTime?: string) => {
+  if (time >= minTime && time <= maxTime && (!referenceTime || time > referenceTime)) {
+    return time;
+  }
+
+  const plusTwelveHours = addHoursToTimeStr(time, 12);
+  if (
+    plusTwelveHours &&
+    plusTwelveHours >= minTime &&
+    plusTwelveHours <= maxTime &&
+    (!referenceTime || plusTwelveHours > referenceTime)
+  ) {
+    return plusTwelveHours;
+  }
+
+  return time;
+};
+
 const isTimeOverlap = (startA: string, endA: string, startB: string, endB: string) => {
   return (startA < endB) && (endA > startB);
 };
@@ -681,7 +711,12 @@ function AppContent() {
         }
       }
       if (name === 'startTime' && typeof value === 'string') {
-        next.endTime = getEndTimeOneHourLater(value);
+        const normalizedStartTime = normalizeTimeInput(value, MIN_BOOKING_TIME, LATEST_START_TIME);
+        next.startTime = normalizedStartTime;
+        next.endTime = getEndTimeOneHourLater(normalizedStartTime);
+      }
+      if (name === 'endTime' && typeof value === 'string') {
+        next.endTime = normalizeTimeInput(value, MIN_BOOKING_TIME, MAX_BOOKING_TIME, next.startTime);
       }
       if (name === 'date' && next.repeatUntil < String(value)) {
         next.repeatUntil = String(value);
@@ -755,11 +790,15 @@ function AppContent() {
         (latest, b) => (b.date > latest ? b.date : latest),
         venueOrBooking.date
       );
-      const inferredRepeatUntil = inferredRepeat === 'none'
+      const repeatLimitDate = getRepeatLimitDate(venueOrBooking.date);
+      const inferredRepeatUntilBase = inferredRepeat === 'none'
         ? venueOrBooking.date
         : (venueOrBooking.repeatUntil && venueOrBooking.repeatUntil >= venueOrBooking.date
           ? (venueOrBooking.repeatUntil > seriesLastDate ? venueOrBooking.repeatUntil : seriesLastDate)
           : seriesLastDate);
+      const inferredRepeatUntil = inferredRepeat === 'none'
+        ? inferredRepeatUntilBase
+        : (inferredRepeatUntilBase > repeatLimitDate ? repeatLimitDate : inferredRepeatUntilBase);
 
       setFormData({
         bookingType: getBookingType(venueOrBooking),
@@ -1353,9 +1392,9 @@ function AppContent() {
             initial={{ opacity: 0, y: -20, x: "-50%" }}
             animate={{ opacity: 1, y: 0, x: "-50%" }}
             exit={{ opacity: 0, y: -20, x: "-50%" }}
-            className="fixed top-20 left-1/2 z-50"
+            className="fixed top-4 left-1/2 z-[120] w-[calc(100%-2rem)] max-w-xl pointer-events-none"
           >
-            <div className={`px-4 py-2 rounded-full shadow-lg flex items-center gap-2 text-sm font-medium text-white
+            <div className={`px-4 py-2 rounded-2xl shadow-lg flex items-center gap-2 text-sm font-medium text-white
               ${toast.type === 'success' ? 'bg-emerald-600' : 'bg-rose-600'}`}>
               <CheckCircle2 size={16} />
               {toast.message}
@@ -2025,7 +2064,7 @@ function AppContent() {
                     </div>
                   )}
 
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 p-4 bg-blue-50/50 border border-blue-100 rounded-2xl">
+                  <div className="grid grid-cols-1 gap-4 p-4 bg-blue-50/50 border border-blue-100 rounded-2xl md:grid-cols-2">
                     <div className="space-y-1.5 min-w-0">
                       <label className="text-xs sm:text-sm font-semibold text-slate-700">重複設定</label>
                       <div className="relative w-full min-w-0 overflow-hidden rounded-xl border border-slate-200 bg-white transition-all focus-within:border-blue-600 focus-within:ring-2 focus-within:ring-blue-600/20">
@@ -2047,9 +2086,9 @@ function AppContent() {
                     </div>
                     {formData.repeat !== 'none' && (
                       <div className="space-y-1.5 min-w-0 animate-in fade-in slide-in-from-left-2">
-                        <div className="flex items-center justify-between">
+                        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                           <label className="text-xs sm:text-sm font-semibold text-slate-700">結束重複日期</label>
-                          <label className="flex items-center gap-1.5 text-xs text-slate-600 cursor-pointer">
+                          <label className="flex items-center gap-1.5 text-xs leading-tight text-slate-600 cursor-pointer sm:justify-end">
                             <input 
                               type="checkbox" 
                               name="repeatForever"
@@ -2057,11 +2096,11 @@ function AppContent() {
                               onChange={handleInputChange}
                               className="rounded border-slate-300 text-blue-600 focus:ring-blue-600"
                             />
-                            不結束 (先建立三個月)
+                            不結束（3個月）
                           </label>
                         </div>
                         <p className="text-[11px] text-slate-500">
-                          重複預約最長可建立到 {repeatLimitDate}
+                          最長到 {repeatLimitDate}
                         </p>
                         {!formData.repeatForever && (
                           <div className="relative w-full min-w-0 overflow-hidden rounded-xl border border-slate-200 bg-white transition-all focus-within:border-blue-600 focus-within:ring-2 focus-within:ring-blue-600/20">
@@ -2112,6 +2151,7 @@ function AppContent() {
                         <div className="relative w-full min-w-0 overflow-hidden rounded-xl border border-slate-200 bg-white transition-all focus-within:border-blue-600 focus-within:ring-2 focus-within:ring-blue-600/20">
                           <input 
                             type="time" 
+                            lang="en-GB"
                             name="startTime"
                             required
                             value={formData.startTime}
@@ -2127,6 +2167,7 @@ function AppContent() {
                         <div className="relative w-full min-w-0 overflow-hidden rounded-xl border border-slate-200 bg-white transition-all focus-within:border-blue-600 focus-within:ring-2 focus-within:ring-blue-600/20">
                           <input 
                             type="time" 
+                            lang="en-GB"
                             name="endTime"
                             required
                             value={formData.endTime}
