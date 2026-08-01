@@ -42,6 +42,7 @@ import {
   query, 
   orderBy, 
   getDocs,
+  getDocsFromServer,
   Timestamp,
   serverTimestamp,
   writeBatch
@@ -342,27 +343,34 @@ const isChurchWideBookingType = (bookingType?: BookingType) => (
 
 const getBookingType = (booking: Pick<Booking, 'bookingType'>): BookingType => booking.bookingType || 'standard';
 
-const isChurchWideBooking = (booking: Pick<Booking, 'bookingType'>) => isChurchWideBookingType(getBookingType(booking));
+const isTuesdayHomePrayerMeeting = (booking: Pick<Booking, 'date' | 'purpose'>) => {
+  if (!booking.date || !booking.purpose.includes('愛家禱告會')) return false;
+  return parseDateStr(booking.date).getDay() === 2;
+};
+
+const isChurchWideBooking = (booking: Pick<Booking, 'bookingType' | 'date' | 'purpose'>) => (
+  isChurchWideBookingType(getBookingType(booking)) && !isTuesdayHomePrayerMeeting(booking)
+);
 
 const getBookingTypeLabel = (bookingType?: BookingType) => BOOKING_TYPE_LABELS[bookingType || 'standard'];
 
-const getBookingVenueLabel = (booking: Pick<Booking, 'bookingType' | 'venue'>) => (
+const getBookingVenueLabel = (booking: Pick<Booking, 'bookingType' | 'venue' | 'date' | 'purpose'>) => (
   isChurchWideBooking(booking) ? CHURCH_WIDE_VENUE : booking.venue
 );
 
-const getBookingCardClasses = (booking: Pick<Booking, 'bookingType' | 'venue'>) => (
+const getBookingCardClasses = (booking: Pick<Booking, 'bookingType' | 'venue' | 'date' | 'purpose'>) => (
   isChurchWideBooking(booking)
     ? 'bg-rose-50 border-rose-200 text-rose-700 hover:bg-rose-100 hover:border-rose-300'
     : getVenueColor(booking.venue)
 );
 
-const getBookingDotClass = (booking: Pick<Booking, 'bookingType' | 'venue'>) => (
+const getBookingDotClass = (booking: Pick<Booking, 'bookingType' | 'venue' | 'date' | 'purpose'>) => (
   isChurchWideBooking(booking)
     ? 'bg-rose-500'
     : (VENUE_DOTS[booking.venue] || 'bg-slate-400')
 );
 
-const compareBookingsForDisplay = (a: Pick<Booking, 'date' | 'startTime' | 'bookingType'>, b: Pick<Booking, 'date' | 'startTime' | 'bookingType'>) => {
+const compareBookingsForDisplay = (a: Pick<Booking, 'date' | 'startTime' | 'bookingType' | 'purpose'>, b: Pick<Booking, 'date' | 'startTime' | 'bookingType' | 'purpose'>) => {
   if (a.date !== b.date) return a.date.localeCompare(b.date);
   if (a.startTime !== b.startTime) return a.startTime.localeCompare(b.startTime);
   if (isChurchWideBooking(a) !== isChurchWideBooking(b)) return isChurchWideBooking(a) ? -1 : 1;
@@ -377,7 +385,7 @@ const getPurposePresetsByType = (bookingType: BookingType) => (
       : PURPOSE_PRESETS
 );
 
-type ConflictCandidate = Pick<Booking, 'date' | 'startTime' | 'endTime' | 'venue' | 'bookingType'>;
+type ConflictCandidate = Pick<Booking, 'date' | 'startTime' | 'endTime' | 'venue' | 'bookingType' | 'purpose'>;
 
 const getConflictingBookings = (
   bookingList: Booking[],
@@ -385,7 +393,7 @@ const getConflictingBookings = (
   excludeId: string | null,
   ignoredIds: Set<string> = new Set()
 ) => {
-  const candidateIsChurchWide = isChurchWideBookingType(candidate.bookingType);
+  const candidateIsChurchWide = isChurchWideBooking(candidate);
 
   return bookingList.filter((booking) => {
     if (booking.id === excludeId) return false;
@@ -434,6 +442,7 @@ function AppContent() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isClearing, setIsClearing] = useState(false);
   const [calendarContextMenu, setCalendarContextMenu] = useState<CalendarContextMenuState | null>(null);
+  const [bookingsSyncAttempt, setBookingsSyncAttempt] = useState(0);
 
   // --- 防止 Modal 開啟時背景滾動 ---
   useEffect(() => {
@@ -476,19 +485,71 @@ function AppContent() {
   // --- Firebase Firestore Real-time Sync ---
   useEffect(() => {
     const q = query(collection(db, 'bookings'), orderBy('date', 'asc'), orderBy('startTime', 'asc'));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
+    let isMounted = true;
+    let retryTimer: number | null = null;
+
+    const applySnapshot = (snapshot: Awaited<ReturnType<typeof getDocs>>) => {
+      if (!isMounted) return;
       const bks: Booking[] = [];
       snapshot.forEach((bookingDoc) => {
         const data = bookingDoc.data() as Omit<Booking, 'id'>;
         bks.push({ ...data, id: bookingDoc.id });
       });
       setBookings(bks);
+    };
+
+    const scheduleRetry = () => {
+      if (retryTimer !== null) return;
+      retryTimer = window.setTimeout(() => {
+        retryTimer = null;
+        if (isMounted) {
+          setBookingsSyncAttempt((attempt) => attempt + 1);
+        }
+      }, 3000);
+    };
+
+    const refreshFromServer = async () => {
+      try {
+        const snapshot = await getDocsFromServer(q);
+        applySnapshot(snapshot);
+      } catch (error) {
+        console.warn('Unable to refresh bookings from Firestore server.', error);
+        scheduleRetry();
+      }
+    };
+
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      applySnapshot(snapshot);
     }, (error) => {
-      handleFirestoreError(error, OperationType.LIST, 'bookings');
+      try {
+        handleFirestoreError(error, OperationType.LIST, 'bookings');
+      } catch (handledError) {
+        console.warn('Bookings listener stopped; scheduling a retry.', handledError);
+      }
+      scheduleRetry();
     });
 
-    return () => unsubscribe();
-  }, []);
+    const handleResume = () => {
+      if (document.visibilityState === 'hidden') return;
+      void refreshFromServer();
+    };
+
+    void refreshFromServer();
+    window.addEventListener('online', handleResume);
+    window.addEventListener('focus', handleResume);
+    window.addEventListener('pageshow', handleResume);
+    document.addEventListener('visibilitychange', handleResume);
+
+    return () => {
+      isMounted = false;
+      if (retryTimer !== null) window.clearTimeout(retryTimer);
+      unsubscribe();
+      window.removeEventListener('online', handleResume);
+      window.removeEventListener('focus', handleResume);
+      window.removeEventListener('pageshow', handleResume);
+      document.removeEventListener('visibilitychange', handleResume);
+    };
+  }, [bookingsSyncAttempt]);
 
   // --- 提示訊息 Toast ---
   const [toast, setToast] = useState<{ show: boolean; message: string; type: 'success' | 'error' }>({ show: false, message: '', type: 'success' });
@@ -499,7 +560,7 @@ function AppContent() {
   };
 
   const fetchAllBookings = async (): Promise<Booking[]> => {
-    const snapshot = await getDocs(collection(db, 'bookings'));
+    const snapshot = await getDocsFromServer(collection(db, 'bookings'));
     const allBookings: Booking[] = [];
     snapshot.forEach((bookingDoc) => {
       const data = bookingDoc.data() as Omit<Booking, 'id'>;
@@ -628,7 +689,8 @@ function AppContent() {
         venue: clipboardBooking.venue,
         date: dateStr,
         startTime: clipboardBooking.startTime,
-        endTime: clipboardBooking.endTime
+        endTime: clipboardBooking.endTime,
+        purpose: clipboardBooking.purpose
       }, null);
 
       if (conflicts.length > 0) {
@@ -950,7 +1012,8 @@ function AppContent() {
           venue: normalizedFormData.venue,
           date,
           startTime: start,
-          endTime: end
+          endTime: end,
+          purpose: normalizedFormData.purpose
         }, excludeId, ignoredIds)
       );
 
@@ -1204,7 +1267,8 @@ function AppContent() {
       venue: effectiveFormData.venue,
       date: effectiveFormData.date,
       startTime: effectiveFormData.startTime,
-      endTime: effectiveFormData.endTime
+      endTime: effectiveFormData.endTime,
+      purpose: effectiveFormData.purpose
     },
     editingId
   );
@@ -1213,6 +1277,8 @@ function AppContent() {
   const conflictSummaries = conflicts.slice(0, 3).map((booking) => (
     `${getBookingVenueLabel(booking)} · ${booking.startTime} - ${booking.endTime} · ${booking.borrower}`
   ));
+  const isFormChurchWideType = isChurchWideBookingType(formData.bookingType);
+  const isFormChurchWideLocking = isChurchWideBooking(formData);
 
   const daysInMonth = new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 0).getDate();
   const firstDayOfMonth = new Date(currentDate.getFullYear(), currentDate.getMonth(), 1).getDay();
@@ -2021,10 +2087,16 @@ function AppContent() {
                     </div>
                   </div>
 
-                  {isChurchWideBookingType(formData.bookingType) && (
+                  {isFormChurchWideType && (
                     <div className="p-4 rounded-2xl border border-amber-200 bg-amber-50 text-amber-900">
-                      <p className="font-bold text-sm">這是一筆全教會封鎖時段</p>
-                      <p className="text-xs sm:text-sm mt-1">建立後，該時段所有空間都會停止借用，月曆與今日狀態也會特別標示。</p>
+                      <p className="font-bold text-sm">
+                        {isFormChurchWideLocking ? '這是一筆全教會封鎖時段' : '週二愛家禱告會不鎖全教會'}
+                      </p>
+                      <p className="text-xs sm:text-sm mt-1">
+                        {isFormChurchWideLocking
+                          ? '建立後，該時段所有空間都會停止借用，月曆與今日狀態也會特別標示。'
+                          : '此例外會保留聚會資料，但不會讓其他場地停止借用，也不會觸發全教會衝突。'}
+                      </p>
                     </div>
                   )}
 
@@ -2121,11 +2193,13 @@ function AppContent() {
                   </div>
 
                   <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100 space-y-4">
-                    {isChurchWideBookingType(formData.bookingType) ? (
+                    {isFormChurchWideType ? (
                       <div className="space-y-1.5 min-w-0">
                         <label className="text-xs sm:text-sm font-semibold text-slate-700">適用範圍</label>
-                        <div className="w-full px-4 py-3 bg-white border border-rose-200 rounded-xl text-sm font-semibold text-rose-700">
-                          {CHURCH_WIDE_VENUE}（所有場地同步停止借用）
+                        <div className={`w-full px-4 py-3 bg-white border rounded-xl text-sm font-semibold ${isFormChurchWideLocking ? 'border-rose-200 text-rose-700' : 'border-blue-200 text-blue-700'}`}>
+                          {isFormChurchWideLocking
+                            ? `${CHURCH_WIDE_VENUE}（所有場地同步停止借用）`
+                            : `${CHURCH_WIDE_VENUE}（週二愛家禱告會不鎖場地）`}
                         </div>
                       </div>
                     ) : (
