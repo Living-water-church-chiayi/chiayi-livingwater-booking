@@ -1,22 +1,64 @@
 @import "tailwindcss";
 
+:root {
+  --surface-canvas: #faf8f4;
+  --surface-card: #ffffff;
+  --surface-subtle: #f3efe8;
+  --ink-primary: #1e1b18;
+  --ink-secondary: #5c554c;
+  --ink-muted: #8a8177;
+  --brand-accent: #b85a1f;
+  --brand-accent-hover: #9f4b17;
+  --brand-gold: #d98a2b;
+  --border-warm: #e8e1d6;
+}
+
 html,
 body,
 #root {
-  touch-action: pan-x pan-y;
+  background-color: var(--surface-canvas);
+  color: var(--ink-primary);
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-text-size-adjust: 100%;
+  overscroll-behavior-y: contain;
+  font-family: -apple-system, BlinkMacSystemFont, "PingFang TC", "Noto Sans TC", "Microsoft JhengHei", sans-serif;
+}
+
+button,
+a,
+select,
+input {
+  touch-action: manipulation;
 }
 
 @layer utilities {
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+
   .custom-scrollbar::-webkit-scrollbar {
     height: 6px;
-    width: 4px;
+    width: 5px;
   }
   .custom-scrollbar::-webkit-scrollbar-track {
     background: transparent;
   }
   .custom-scrollbar::-webkit-scrollbar-thumb {
-    background-color: #cbd5e1;
+    background-color: #d6cdc0;
     border-radius: 20px;
+  }
+
+  .pb-safe {
+    padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
+  }
+
+  .pt-safe {
+    padding-top: env(safe-area-inset-top);
   }
 
   .input-safe-mobile {
@@ -33,13 +75,22 @@ body,
 
   .select-safe-mobile {
     box-sizing: border-box;
-    display: block;
     inline-size: 100%;
     max-inline-size: 100%;
     min-inline-size: 0;
-    -webkit-appearance: none;
-    appearance: none;
+    -webkit-appearance: none !important;
+    -moz-appearance: none !important;
+    appearance: none !important;
+    background-image: none !important;
     background-clip: padding-box;
+  }
+
+  .select-safe-mobile::-ms-expand {
+    display: none;
+  }
+
+  .select-safe-mobile::picker-icon {
+    display: none;
   }
 
   .input-safe-mobile::-webkit-date-and-time-value {
