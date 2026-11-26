@@ -37,6 +37,14 @@ export class ErrorBoundary extends React.Component<
     } catch {
       // Ignore storage access errors in private browsing
     }
+    if (typeof window.caches !== 'undefined') {
+      window.caches
+        .keys()
+        .then((keys) => Promise.all(keys.map((key) => window.caches.delete(key))))
+        .catch(() => undefined)
+        .finally(() => window.location.reload());
+      return;
+    }
     window.location.reload();
   };
 

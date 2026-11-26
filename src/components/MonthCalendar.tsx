@@ -52,6 +52,27 @@ interface MonthCalendarProps {
   onPasteToDate: (dateStr: string) => void;
 }
 
+const MOBILE_SHORT_VENUE: Record<string, string> = {
+  '2F主堂': '2F主堂',
+  '飛鷹堂': '飛鷹堂',
+  '副堂': '副堂',
+  '馬可餐廳': '馬可',
+  '4F': '4F',
+  '3F大空間': '3F空間',
+  '3F幼幼班': '幼幼班',
+  '3F會議室': '會議室',
+  '方舟小棧': '方舟',
+  '豐盛教室': '豐盛',
+  '地下室': '地下室',
+};
+
+const getMobileEventLabel = (booking: Booking): string => {
+  if (isChurchWideBooking(booking)) {
+    return booking.purpose || '全教會';
+  }
+  return MOBILE_SHORT_VENUE[booking.venue] || booking.venue;
+};
+
 const MonthCalendar = memo(function MonthCalendar({
   bookings,
   orderedVenues,
@@ -75,7 +96,29 @@ const MonthCalendar = memo(function MonthCalendar({
   onPasteToDate,
 }: MonthCalendarProps) {
   const swipeStartRef = useRef<{ x: number; y: number } | null>(null);
+  const sheetDragStartYRef = useRef<number | null>(null);
   const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
+  const [mobileSheetOpen, setMobileSheetOpen] = useState(false);
+
+  // Close mobile bottom sheet automatically if viewport expands to desktop split-view
+  useEffect(() => {
+    if (!mobileSheetOpen) return;
+    const onResize = () => {
+      if (window.innerWidth >= 1024) setMobileSheetOpen(false);
+    };
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, [mobileSheetOpen]);
+
+  // Lock background scroll while mobile day sheet is open
+  useEffect(() => {
+    if (!mobileSheetOpen) return;
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = prevOverflow;
+    };
+  }, [mobileSheetOpen]);
 
   const todayStr = getTodayStr();
   const year = currentDate.getFullYear();
@@ -99,19 +142,12 @@ const MonthCalendar = memo(function MonthCalendar({
   const isAllVenuesSelected = selectedVenues.length === VENUES.length;
   const selectedVenueSet = useMemo(() => new Set(selectedVenues), [selectedVenues]);
 
-  // Pre-index bookings by date once: separate venue bookings & church-wide time slots cleanly
-  const { bookingsByDate, churchWideByDate } = useMemo(() => {
+  // Pre-index bookings by date once
+  const bookingsByDate = useMemo(() => {
     const byDate = new Map<string, Booking[]>();
-    const wideByDate = new Map<string, Booking[]>();
 
     for (const b of bookings) {
       const churchWide = isChurchWideBooking(b);
-      if (churchWide) {
-        const arr = wideByDate.get(b.date);
-        if (arr) arr.push(b);
-        else wideByDate.set(b.date, [b]);
-      }
-
       if (!churchWide && !selectedVenueSet.has(b.venue)) continue;
 
       if (normalizedQuery) {
@@ -125,8 +161,7 @@ const MonthCalendar = memo(function MonthCalendar({
     }
 
     byDate.forEach((arr) => arr.sort(compareBookingsForDisplay));
-    wideByDate.forEach((arr) => arr.sort(compareBookingsForDisplay));
-    return { bookingsByDate: byDate, churchWideByDate: wideByDate };
+    return byDate;
   }, [bookings, selectedVenueSet, normalizedQuery]);
 
   const currentMonthPrefix = `${year}-${String(month + 1).padStart(2, '0')}-`;
@@ -157,18 +192,155 @@ const MonthCalendar = memo(function MonthCalendar({
     else onNextMonth();
   };
 
+  const handleDateCellClick = (dateStr: string) => {
+    onSelectDate(dateStr);
+    if (typeof window !== 'undefined' && window.innerWidth < 1024) {
+      setMobileSheetOpen(true);
+    }
+  };
+
   const stepSelectedDay = (delta: number) => {
     onSelectDate(addDaysToDateStr(selectedDateStr, delta));
   };
 
+  const renderAgendaContent = (compact = false) => (
+    <AnimatePresence mode="wait" initial={false}>
+      <motion.div
+        key={isInitialLoading ? 'loading' : `${selectedDateStr}-${normalizedQuery}`}
+        initial={{ opacity: 0, y: 6 }}
+        animate={{ opacity: 1, y: 0 }}
+        exit={{ opacity: 0, y: -4 }}
+        transition={{ duration: 0.16, ease: 'easeOut' }}
+      >
+        {isInitialLoading ? (
+          <div className="space-y-2.5">
+            {Array.from({ length: 3 }).map((_, i) => (
+              <div
+                key={i}
+                className="h-24 rounded-2xl bg-[#F7F4EE] border border-[#ECE5DA] animate-pulse"
+              />
+            ))}
+          </div>
+        ) : selectedDateBookings.length === 0 ? (
+          <div className="py-10 text-center rounded-2xl border border-dashed border-[#E2D9CC] bg-[#FCFBF8]">
+            <div className="w-11 h-11 rounded-2xl bg-white border border-[#EAE3D8] flex items-center justify-center mx-auto mb-2.5 text-[#C2B7A9]">
+              <CalendarIcon size={20} />
+            </div>
+            <p className="text-sm font-semibold text-[#6E665C]">
+              {normalizedQuery ? '找不到符合條件的預約' : '當日尚無場地預約'}
+            </p>
+            {!normalizedQuery && !compact && (
+              <button
+                type="button"
+                onClick={() => onNewBooking(selectedDateStr)}
+                className="mt-3 px-3.5 py-2 rounded-xl bg-[#FFF3E3] text-xs font-bold text-[#B85A1F] hover:bg-[#FDE7CC] active:scale-95 transition inline-flex items-center gap-1 cursor-pointer"
+              >
+                <Plus size={14} />
+                安排這天的第一個時段
+              </button>
+            )}
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 gap-2.5 lg:max-h-[calc(100vh-220px)] lg:overflow-y-auto custom-scrollbar lg:pr-0.5">
+            {selectedDateBookings.map((b, idx) => {
+              const style = getBookingStyle(b);
+              const duration = formatDurationLabel(b.startTime, b.endTime);
+              const churchWide = isChurchWideBooking(b);
+
+              return (
+                <motion.div
+                  key={b.id}
+                  initial={{ opacity: 0, y: 6 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.18, delay: Math.min(idx * 0.03, 0.15) }}
+                  whileHover={{ y: -1 }}
+                  whileTap={{ scale: 0.985 }}
+                  onClick={() => onEditBooking(b)}
+                  role="button"
+                  tabIndex={0}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      onEditBooking(b);
+                    }
+                  }}
+                  className={`rounded-2xl border p-3.5 transition-colors cursor-pointer flex flex-col gap-2 ${style.card}`}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-1.5 flex-wrap min-w-0">
+                      <span className="inline-flex items-center gap-1 text-sm font-bold tabular-nums text-[#1E1B18]">
+                        <Clock size={13} className="opacity-70 shrink-0" />
+                        {b.startTime}–{b.endTime}
+                      </span>
+                      {duration && (
+                        <span className="px-1.5 py-0.5 rounded-md bg-white/80 text-[10px] font-semibold text-[#5C554C]">
+                          {duration}
+                        </span>
+                      )}
+                      {b.groupId && (
+                        <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-md bg-white/80 text-[10px] font-semibold text-[#5C554C]">
+                          <Repeat size={10} />
+                          重複
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="flex items-center gap-1 shrink-0">
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onCopyBooking(b);
+                        }}
+                        className="w-8 h-8 rounded-lg bg-white/85 hover:bg-white text-[#5C554C] hover:text-[#B85A1F] flex items-center justify-center transition active:scale-95 cursor-pointer"
+                        title="複製此預約"
+                      >
+                        <Copy size={14} />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onEditBooking(b);
+                        }}
+                        className="w-8 h-8 rounded-lg bg-white/85 hover:bg-white text-[#5C554C] hover:text-[#B85A1F] flex items-center justify-center transition active:scale-95 cursor-pointer"
+                        title="編輯此預約"
+                      >
+                        <Edit2 size={14} />
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2.5 flex-wrap text-xs sm:text-sm">
+                    <span className="inline-flex items-center gap-1 font-bold text-[#1E1B18]">
+                      <MapPin size={13} className="opacity-70 shrink-0" />
+                      {churchWide ? '全教會時段' : b.venue}
+                    </span>
+                    <span className="inline-flex items-center gap-1 text-[#4A433C] font-medium">
+                      <Users size={13} className="opacity-65 shrink-0" />
+                      {b.borrower}
+                    </span>
+                  </div>
+
+                  <p className="text-xs text-[#5C554C] bg-white/65 rounded-xl px-3 py-1.5 border border-black/5 truncate">
+                    {b.purpose}
+                  </p>
+                </motion.div>
+              );
+            })}
+          </div>
+        )}
+      </motion.div>
+    </AnimatePresence>
+  );
+
   return (
     /* Responsive Layout:
-       - Phone (< 640px): compact stacked calendar + swipeable agenda
-       - Tablet Portrait (640px - 1023px): comfortable calendar + 2-column agenda
+       - Phone & Tablet Portrait (< 1024px): single-screen readable calendar + instant slide-up Day Bottom Sheet (zero scroll back-and-forth!)
        - Tablet Landscape & Desktop (>= 1024px): side-by-side Calendar + Sticky Agenda panel! */
     <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_360px] xl:grid-cols-[minmax(0,1fr)_400px] gap-4 sm:gap-5 items-start">
       {/* LEFT / TOP: Month Calendar Card */}
-      <div className="bg-white rounded-3xl border border-[#E8E1D6] shadow-[0_4px_20px_rgba(30,27,24,0.04)] overflow-hidden p-3 sm:p-5">
+      <div className="bg-white rounded-3xl border border-[#E8E1D6] shadow-[0_4px_20px_rgba(30,27,24,0.04)] overflow-hidden p-2.5 sm:p-5">
         {/* Month Header + Search */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 mb-3">
           <div className="flex items-center justify-between sm:justify-start gap-2.5">
@@ -324,7 +496,7 @@ const MonthCalendar = memo(function MonthCalendar({
                 {Array.from({ length: firstDayOfMonth }).map((_, idx) => (
                   <div
                     key={`pad-${idx}`}
-                    className="bg-[#FDFCFA] min-h-[54px] sm:min-h-[84px] lg:min-h-[92px]"
+                    className="bg-[#FDFCFA] min-h-[72px] sm:min-h-[84px] lg:min-h-[92px]"
                   />
                 ))}
 
@@ -332,8 +504,6 @@ const MonthCalendar = memo(function MonthCalendar({
                   const day = idx + 1;
                   const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
                   const dayBookings = bookingsByDate.get(dateStr) ?? [];
-                  const dayChurchWide = churchWideByDate.get(dateStr) ?? [];
-                  const hasChurchWide = dayChurchWide.length > 0;
                   const isToday = dateStr === todayStr;
                   const isSelected = dateStr === selectedDateStr;
                   const isPast = dateStr < todayStr;
@@ -341,9 +511,9 @@ const MonthCalendar = memo(function MonthCalendar({
                   return (
                     <div
                       key={dateStr}
-                      onClick={() => onSelectDate(dateStr)}
+                      onClick={() => handleDateCellClick(dateStr)}
                       onContextMenu={(e) => onContextMenuDate(e, dateStr)}
-                      className={`min-h-[54px] sm:min-h-[84px] lg:min-h-[92px] p-1 sm:p-1.5 transition-colors cursor-pointer relative flex flex-col active:bg-[#FFF3E3] ${
+                      className={`min-h-[72px] sm:min-h-[84px] lg:min-h-[92px] p-0.5 sm:p-1.5 transition-colors cursor-pointer relative flex flex-col active:bg-[#FFF3E3] ${
                         isSelected ? 'bg-[#FFF8F0]' : 'bg-white hover:bg-[#FBF9F5]'
                       }`}
                     >
@@ -356,18 +526,10 @@ const MonthCalendar = memo(function MonthCalendar({
                         />
                       )}
 
-                      {/* Subtle Top-Left Indicator Dot ONLY when that day has a church-wide time slot */}
-                      {hasChurchWide && (
-                        <span
-                          title={`全教會時段：${dayChurchWide.map((b) => `${b.startTime}–${b.endTime} ${b.purpose}`).join('、')}`}
-                          className="absolute top-1.5 left-1.5 w-1.5 h-1.5 rounded-full bg-[#C43E3E] z-10"
-                        />
-                      )}
-
                       {/* Day Number */}
-                      <div className="flex items-center justify-center sm:justify-end mb-1">
+                      <div className="flex items-center justify-center sm:justify-end mb-0.5 sm:mb-1">
                         <span
-                          className={`inline-flex items-center justify-center w-6 h-6 rounded-full text-xs font-semibold tabular-nums transition-colors ${
+                          className={`inline-flex items-center justify-center w-5 h-5 sm:w-6 sm:h-6 rounded-full text-[11px] sm:text-xs font-semibold tabular-nums transition-colors ${
                             isToday
                               ? 'bg-[#B85A1F] text-white shadow-xs'
                               : isSelected
@@ -381,26 +543,27 @@ const MonthCalendar = memo(function MonthCalendar({
                         </span>
                       </div>
 
-                      {/* Phone: Compact Colored Dots + Count */}
-                      <div className="flex sm:hidden flex-col items-center justify-center gap-0.5 mt-auto pb-1">
-                        {dayBookings.length > 0 && (
-                          <div className="flex flex-wrap justify-center gap-1 max-w-full">
-                            {dayBookings.slice(0, 4).map((b) => (
-                              <span
-                                key={b.id}
-                                className={`w-1.5 h-1.5 rounded-full ${getBookingStyle(b).dot}`}
-                              />
-                            ))}
-                            {dayBookings.length > 4 && (
-                              <span className="text-[9px] font-bold text-[#8A8177] leading-none">
-                                +{dayBookings.length - 4}
-                              </span>
-                            )}
-                          </div>
+                      {/* Phone: Readable Mini Color-Coded Event Labels (no mystery dots!) */}
+                      <div className="flex sm:hidden flex-col gap-[2px] flex-1 overflow-hidden w-full">
+                        {dayBookings.slice(0, 3).map((b) => {
+                          const style = getBookingStyle(b);
+                          return (
+                            <div
+                              key={b.id}
+                              className={`w-full px-1 py-[1px] rounded-[4px] text-[9.5px] leading-[1.25] font-semibold truncate text-center ${style.chip}`}
+                            >
+                              {getMobileEventLabel(b)}
+                            </div>
+                          );
+                        })}
+                        {dayBookings.length > 3 && (
+                          <span className="text-[9px] font-bold text-[#8A8177] leading-none text-center mt-0.5 tabular-nums">
+                            +{dayBookings.length - 3}
+                          </span>
                         )}
                       </div>
 
-                      {/* Tablet & Desktop: Clean Mini Event Pills */}
+                      {/* Tablet & Desktop: Clean Mini Event Pills with Start Time */}
                       <div className="hidden sm:flex flex-col gap-0.5 flex-1 overflow-hidden">
                         {dayBookings.slice(0, 3).map((b) => {
                           const style = getBookingStyle(b);
@@ -430,19 +593,43 @@ const MonthCalendar = memo(function MonthCalendar({
             </AnimatePresence>
           </div>
 
-          <div className="flex items-center justify-between mt-2.5 px-1 text-[11px] text-[#8A8177]">
-            <span className="inline-flex items-center gap-1.5">
-              <span className="w-1.5 h-1.5 rounded-full bg-[#C43E3E]" />
-              左上紅點代表當日含全教會時段
-            </span>
-            <span className="sm:hidden">左右滑動可換月</span>
+          {/* Mobile / Tablet Portrait: Compact 1-Line Selected Day Trigger (Zero Back-and-Forth Scrolling!) */}
+          <div className="lg:hidden mt-2.5 flex items-center justify-between gap-2">
+            <button
+              type="button"
+              onClick={() => setMobileSheetOpen(true)}
+              className="w-full flex items-center justify-between gap-2 px-3.5 py-2.5 rounded-2xl bg-[#FAF8F4] hover:bg-[#F3EFE8] border border-[#E6DFD3] active:scale-[0.99] transition cursor-pointer"
+            >
+              <div className="flex items-center gap-2 min-w-0">
+                <span className="text-xs sm:text-sm font-bold text-[#1E1B18] whitespace-nowrap">
+                  {formatDateShort(selectedDateStr)}
+                </span>
+                {selectedDateStr === todayStr && (
+                  <span className="px-1.5 py-0.5 rounded-full bg-[#B85A1F] text-white text-[10px] font-bold shrink-0">
+                    今天
+                  </span>
+                )}
+                <span className="text-xs text-[#7A7167] tabular-nums truncate">
+                  · 共 {selectedDateBookings.length} 筆預約
+                </span>
+              </div>
+              <span className="inline-flex items-center gap-0.5 text-xs font-bold text-[#B85A1F] shrink-0">
+                查看詳情
+                <ChevronRight size={14} />
+              </span>
+            </button>
+          </div>
+
+          <div className="flex items-center justify-between mt-2 px-1 text-[11px] text-[#8A8177]">
+            <span className="lg:hidden">點選日期直接彈出當日詳情 · 左右滑動換月</span>
+            <span className="hidden lg:inline">點選日期查看右側詳情 · 紅底標籤為全教會時段</span>
           </div>
         </div>
       </div>
 
-      {/* RIGHT (Tablet Landscape / Desktop) / BOTTOM (Phone / Tablet Portrait): Sticky Date Detail Panel */}
-      <div className="bg-white rounded-3xl border border-[#E8E1D6] shadow-[0_4px_20px_rgba(30,27,24,0.04)] p-4 sm:p-5 lg:sticky lg:top-20">
-        {/* Date Header + Quick Prev/Next Day Stepper for Effortless Phone/Tablet Browsing */}
+      {/* RIGHT (Tablet Landscape / Desktop >= 1024px): Sticky Date Detail Panel (No Duplicate Booking Button!) */}
+      <div className="hidden lg:block bg-white rounded-3xl border border-[#E8E1D6] shadow-[0_4px_20px_rgba(30,27,24,0.04)] p-5 lg:sticky lg:top-20">
+        {/* Date Header + Quick Prev/Next Day Stepper */}
         <div className="flex items-center justify-between gap-2 pb-3.5 mb-3.5 border-b border-[#F2ECE3]">
           <div className="flex items-center gap-2 min-w-0">
             <div className="flex items-center bg-[#F5F1EA] rounded-xl p-0.5 shrink-0">
@@ -466,7 +653,7 @@ const MonthCalendar = memo(function MonthCalendar({
 
             <div className="min-w-0">
               <div className="flex items-center gap-1.5 flex-wrap">
-                <h3 className="text-sm sm:text-base font-bold text-[#1E1B18] whitespace-nowrap">
+                <h3 className="text-base font-bold text-[#1E1B18] whitespace-nowrap">
                   {formatDateShort(selectedDateStr)}
                 </h3>
                 {selectedDateStr === todayStr && (
@@ -481,159 +668,134 @@ const MonthCalendar = memo(function MonthCalendar({
             </div>
           </div>
 
-          <div className="flex items-center gap-1.5 shrink-0">
-            {clipboardBooking && (
-              <button
-                type="button"
-                onClick={() => onPasteToDate(selectedDateStr)}
-                className="inline-flex items-center gap-1 px-2.5 h-9 rounded-xl text-xs font-semibold text-[#8E4716] bg-[#FFF3E3] hover:bg-[#FDE6CA] border border-[#E8C59B] active:scale-95 transition cursor-pointer"
-                title="貼上複製的預約到此日"
-              >
-                <ClipboardPaste size={14} />
-                <span>貼上</span>
-              </button>
-            )}
+          {clipboardBooking && (
             <button
               type="button"
-              onClick={() => onNewBooking(selectedDateStr)}
-              className="inline-flex items-center gap-1 px-3 h-9 rounded-xl text-xs font-semibold text-white bg-[#B85A1F] hover:bg-[#9E4B18] active:scale-95 transition cursor-pointer"
+              onClick={() => onPasteToDate(selectedDateStr)}
+              className="inline-flex items-center gap-1 px-2.5 h-9 rounded-xl text-xs font-semibold text-[#8E4716] bg-[#FFF3E3] hover:bg-[#FDE6CA] border border-[#E8C59B] active:scale-95 transition shrink-0 cursor-pointer"
+              title="貼上複製的預約到此日"
             >
-              <Plus size={14} />
-              <span>預約</span>
+              <ClipboardPaste size={14} />
+              <span>貼上</span>
             </button>
-          </div>
+          )}
         </div>
 
-        {/* Agenda Cards with smooth date-change crossfade */}
-        <AnimatePresence mode="wait" initial={false}>
+        {renderAgendaContent(false)}
+      </div>
+
+      {/* MOBILE / TABLET PORTRAIT (< 1024px): Instant Slide-Up Day Agenda Bottom Sheet */}
+      <AnimatePresence>
+        {mobileSheetOpen && (
           <motion.div
-            key={isInitialLoading ? 'loading' : `${selectedDateStr}-${normalizedQuery}`}
-            initial={{ opacity: 0, y: 6 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -4 }}
-            transition={{ duration: 0.16, ease: 'easeOut' }}
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.16 }}
+            onClick={() => setMobileSheetOpen(false)}
+            className="lg:hidden fixed inset-0 z-40 bg-[#1E1B18]/45 backdrop-blur-[2px] flex items-end justify-center"
           >
-            {isInitialLoading ? (
-              <div className="space-y-2.5">
-                {Array.from({ length: 3 }).map((_, i) => (
-                  <div
-                    key={i}
-                    className="h-24 rounded-2xl bg-[#F7F4EE] border border-[#ECE5DA] animate-pulse"
-                  />
-                ))}
-              </div>
-            ) : selectedDateBookings.length === 0 ? (
-              <div className="py-10 text-center rounded-2xl border border-dashed border-[#E2D9CC] bg-[#FCFBF8]">
-                <div className="w-11 h-11 rounded-2xl bg-white border border-[#EAE3D8] flex items-center justify-center mx-auto mb-2.5 text-[#C2B7A9]">
-                  <CalendarIcon size={20} />
-                </div>
-                <p className="text-sm font-semibold text-[#6E665C]">
-                  {normalizedQuery ? '找不到符合條件的預約' : '當日尚無場地預約'}
-                </p>
-                {!normalizedQuery && (
+            <motion.div
+              initial={{ y: '100%' }}
+              animate={{ y: 0 }}
+              exit={{ y: '100%' }}
+              transition={{ type: 'spring', stiffness: 420, damping: 38 }}
+              onClick={(e) => e.stopPropagation()}
+              className="w-full max-w-xl bg-white rounded-t-3xl border-t border-[#E8E1D6] shadow-2xl flex flex-col max-h-[78dvh] overflow-hidden"
+            >
+              {/* Drag Handle + Header (Swipe down to dismiss cleanly) */}
+              <div
+                onTouchStart={(e) => {
+                  sheetDragStartYRef.current = e.changedTouches[0].clientY;
+                }}
+                onTouchEnd={(e) => {
+                  const startY = sheetDragStartYRef.current;
+                  sheetDragStartYRef.current = null;
+                  if (startY !== null && e.changedTouches[0].clientY - startY > 55) {
+                    setMobileSheetOpen(false);
+                  }
+                }}
+                className="px-4 pt-2.5 pb-3 border-b border-[#F2ECE3] bg-[#FAF8F4]/90 shrink-0"
+              >
+                <div className="w-10 h-1 rounded-full bg-[#D8CFC2] mx-auto mb-2.5" />
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <div className="flex items-center bg-white border border-[#E6DFD3] rounded-xl p-0.5 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => stepSelectedDay(-1)}
+                        className="w-8 h-8 flex items-center justify-center rounded-lg text-[#5C554C] active:bg-[#F5F1EA] transition cursor-pointer"
+                        aria-label="前一天"
+                      >
+                        <ChevronLeft size={16} />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => stepSelectedDay(1)}
+                        className="w-8 h-8 flex items-center justify-center rounded-lg text-[#5C554C] active:bg-[#F5F1EA] transition cursor-pointer"
+                        aria-label="後一天"
+                      >
+                        <ChevronRight size={16} />
+                      </button>
+                    </div>
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-1.5">
+                        <h3 className="text-base font-bold text-[#1E1B18] whitespace-nowrap">
+                          {formatDateShort(selectedDateStr)}
+                        </h3>
+                        {selectedDateStr === todayStr && (
+                          <span className="px-1.5 py-0.5 rounded-full bg-[#B85A1F] text-white text-[10px] font-bold">
+                            今天
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-[11px] text-[#8A8177] tabular-nums">
+                        共 {selectedDateBookings.length} 筆預約
+                      </p>
+                    </div>
+                  </div>
+
                   <button
                     type="button"
-                    onClick={() => onNewBooking(selectedDateStr)}
-                    className="mt-3 px-3.5 py-2 rounded-xl bg-[#FFF3E3] text-xs font-bold text-[#B85A1F] hover:bg-[#FDE7CC] active:scale-95 transition inline-flex items-center gap-1 cursor-pointer"
+                    onClick={() => setMobileSheetOpen(false)}
+                    className="w-8 h-8 rounded-full bg-white border border-[#E6DFD3] text-[#6E665C] flex items-center justify-center active:scale-95 transition shrink-0 cursor-pointer"
+                    aria-label="關閉當日詳情"
                   >
-                    <Plus size={14} />
-                    安排這天的第一個時段
+                    <X size={16} />
+                  </button>
+                </div>
+              </div>
+
+              {/* Scrollable Day Agenda List */}
+              <div className="p-4 overflow-y-auto custom-scrollbar flex-1">
+                {renderAgendaContent(true)}
+              </div>
+
+              {/* Single Focused Action Footer (Bottom nav is covered by sheet, so strictly ONE booking CTA!) */}
+              <div className="px-4 py-3 pb-safe border-t border-[#F0EAE0] bg-[#FAF8F4] flex items-center gap-2 shrink-0">
+                {clipboardBooking && (
+                  <button
+                    type="button"
+                    onClick={() => onPasteToDate(selectedDateStr)}
+                    className="inline-flex items-center justify-center gap-1.5 px-3.5 h-11 rounded-2xl text-xs font-bold text-[#8E4716] bg-[#FFF3E3] border border-[#E8C59B] active:scale-95 transition shrink-0 cursor-pointer"
+                  >
+                    <ClipboardPaste size={15} />
+                    <span>貼上到此日</span>
                   </button>
                 )}
+                <button
+                  type="button"
+                  onClick={() => onNewBooking(selectedDateStr)}
+                  className="flex-1 inline-flex items-center justify-center gap-1.5 h-11 rounded-2xl text-sm font-bold text-white bg-[#B85A1F] hover:bg-[#9E4B18] shadow-[0_4px_14px_rgba(184,90,31,0.28)] active:scale-[0.98] transition cursor-pointer"
+                >
+                  <Plus size={16} />
+                  <span>新增 {formatDateShort(selectedDateStr)} 預約</span>
+                </button>
               </div>
-            ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-1 gap-2.5 lg:max-h-[calc(100vh-220px)] lg:overflow-y-auto custom-scrollbar lg:pr-0.5">
-                {selectedDateBookings.map((b, idx) => {
-                  const style = getBookingStyle(b);
-                  const duration = formatDurationLabel(b.startTime, b.endTime);
-                  const churchWide = isChurchWideBooking(b);
-
-                  return (
-                    <motion.div
-                      key={b.id}
-                      initial={{ opacity: 0, y: 6 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      transition={{ duration: 0.18, delay: Math.min(idx * 0.03, 0.15) }}
-                      whileHover={{ y: -1 }}
-                      whileTap={{ scale: 0.985 }}
-                      onClick={() => onEditBooking(b)}
-                      role="button"
-                      tabIndex={0}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter' || e.key === ' ') {
-                          e.preventDefault();
-                          onEditBooking(b);
-                        }
-                      }}
-                      className={`rounded-2xl border p-3.5 transition-colors cursor-pointer flex flex-col gap-2 ${style.card}`}
-                    >
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="flex items-center gap-1.5 flex-wrap min-w-0">
-                          <span className="inline-flex items-center gap-1 text-sm font-bold tabular-nums text-[#1E1B18]">
-                            <Clock size={13} className="opacity-70 shrink-0" />
-                            {b.startTime}–{b.endTime}
-                          </span>
-                          {duration && (
-                            <span className="px-1.5 py-0.5 rounded-md bg-white/80 text-[10px] font-semibold text-[#5C554C]">
-                              {duration}
-                            </span>
-                          )}
-                          {b.groupId && (
-                            <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-md bg-white/80 text-[10px] font-semibold text-[#5C554C]">
-                              <Repeat size={10} />
-                              重複
-                            </span>
-                          )}
-                        </div>
-
-                        <div className="flex items-center gap-1 shrink-0">
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              onCopyBooking(b);
-                            }}
-                            className="w-8 h-8 rounded-lg bg-white/85 hover:bg-white text-[#5C554C] hover:text-[#B85A1F] flex items-center justify-center transition active:scale-95 cursor-pointer"
-                            title="複製此預約"
-                          >
-                            <Copy size={14} />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              onEditBooking(b);
-                            }}
-                            className="w-8 h-8 rounded-lg bg-white/85 hover:bg-white text-[#5C554C] hover:text-[#B85A1F] flex items-center justify-center transition active:scale-95 cursor-pointer"
-                            title="編輯此預約"
-                          >
-                            <Edit2 size={14} />
-                          </button>
-                        </div>
-                      </div>
-
-                      <div className="flex items-center gap-2.5 flex-wrap text-xs sm:text-sm">
-                        <span className="inline-flex items-center gap-1 font-bold text-[#1E1B18]">
-                          <MapPin size={13} className="opacity-70 shrink-0" />
-                          {churchWide ? '全教會時段' : b.venue}
-                        </span>
-                        <span className="inline-flex items-center gap-1 text-[#4A433C] font-medium">
-                          <Users size={13} className="opacity-65 shrink-0" />
-                          {b.borrower}
-                        </span>
-                      </div>
-
-                      <p className="text-xs text-[#5C554C] bg-white/65 rounded-xl px-3 py-1.5 border border-black/5 truncate">
-                        {b.purpose}
-                      </p>
-                    </motion.div>
-                  );
-                })}
-              </div>
-            )}
+            </motion.div>
           </motion.div>
-        </AnimatePresence>
-      </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 });
